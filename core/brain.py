@@ -320,10 +320,65 @@ class Brain:
             return None
         target = m.group(1).strip()
         target = re.sub(r"\b(for me|please|now)\b", "", target).strip()
+
+        browser = ""
+        br_m = re.search(
+            r"\s+(?:in|on|with|using)\s+(brave(?:\s+browser)?|chrome|google\s+chrome|edge|microsoft\s+edge|firefox)"
+            r"(?:\s+browser)?\s*$", target)
+        if br_m:
+            browser = re.sub(r"\s+", " ", br_m.group(1))
+            target = target[: br_m.start()].strip()
+            target = re.sub(r"^(?:a|an|the)\s+", "", target)
+
+        tab_m = re.match(r"^(?:a\s+)?new\s+tab$", target) or re.match(r"^new\s+tab$", target)
+        if tab_m:
+            try:
+                if browser:
+                    pc.open_in_browser("about:blank", browser)
+                    return (f"A new {browser} window is up.", None)
+                webbrowser_mod = __import__("webbrowser")
+                webbrowser_mod.open_new_tab("about:blank")
+                return ("A new tab is open.", None)
+            except Exception as exc:
+                return (f"I could not open a new tab: {exc}", None)
+
+        search_q = re.search(r"\bnew\s+tab\b.*?\b(?:search(?:\s+for)?|look\s+up)\s+(.+)", target)
+        if search_q:
+            query = search_q.group(1).strip(" ?")
+            try:
+                opened = pc.open_in_browser(query, browser)
+                return (f"Searching for {query} — {opened}.", None)
+            except Exception as exc:
+                return (f"The search failed: {exc}", None)
+
+        compound = re.match(r"^(.+?)\s+and\s+(?:search(?:\s+for)?|look\s+up)\s+(.+)$", target)
+        if compound:
+            first, second = compound.group(1).strip(), compound.group(2).strip(" ?")
+            note = ""
+            try:
+                pc.open_target(first)
+            except Exception:
+                note = f"I could not find '{first}', but "
+            try:
+                opened = pc.open_in_browser(second, browser)
+                return (f"{note}opening {first} done, and searching for {second}: {opened}.", None)
+            except Exception as exc:
+                return (f"The search failed: {exc}", None)
+
+        if browser:
+            try:
+                opened = pc.open_in_browser(target, browser)
+                return (f"Opening {target} in {browser}: {opened}.", None)
+            except Exception as exc:
+                return (f"Opening {target} in {browser} failed: {exc}", None)
+
         try:
             opened = pc.open_target(target)
             return (f"Opening {opened}.", None)
         except FileNotFoundError:
+            if target in pc.SITES or pc._is_web_address(target):
+                opened = pc.open_in_browser(target)
+                return (f"No app named '{target}', so I opened it on the web: {opened}.", None)
             return (f"I could not find an app called '{target}'. Try opening its website instead?", None)
         except Exception as exc:
             return (f"Opening {target} failed: {exc}", None)
@@ -889,9 +944,12 @@ class Brain:
                 pages.append(webtools.fetch_page(r["url"], max_chars=1400))
             except Exception:
                 continue
+        if not pages:
+            pages = [f"{r['title']}\n{r.get('snippet', '')}" for r in results if r.get("snippet")]
 
-        if config.llm_enabled() and pages:
-            material = "\n\n".join(pages)[:6000]
+        summary = ""
+        material = "\n\n".join(pages)[:6000]
+        if config.any_brain_available() and pages:
             try:
                 summary = self._llm(
                     "You are a research analyst. Synthesise the material below into key findings about the topic. Max 130 words.",
@@ -900,12 +958,23 @@ class Brain:
                 )
             except Exception:
                 summary = ""
-        else:
-            summary = " ".join(p.split("\n", 1)[-1][:200] for p in pages)
+        if not summary:
+            sentences = re.split(r"(?<=[.!?])\s+", " ".join(p.split("\n", 1)[-1] for p in pages))
+            picked, length = [], 0
+            for s in sentences:
+                s = s.strip()
+                if len(s) < 40 or topic.split()[0].lower() not in s.lower() and len(s) > 320:
+                    continue
+                picked.append(s)
+                length += len(s)
+                if length > 700 or len(picked) >= 4:
+                    break
+            summary = " ".join(picked)[:900]
 
         db.learn(topic, (summary or "\n".join(pages))[:4000], "; ".join(r["url"] for r in results[:3]))
         links = ", ".join(r["url"] for r in results[:3])
-        body = summary or "I gathered sources but could not summarise them."
+        body = summary or ("I reached my limits on the sources, so here is what I saved: "
+                           + " | ".join(r["title"] for r in results[:3]))
         return {
             "reply": f"Research complete on {topic}: {body} Sources: {links}",
             "refresh": ["knowledge"],
@@ -957,7 +1026,14 @@ class Brain:
                     del self.history[:-24]
                 return {"reply": answer, "refresh": []}
             except Exception as exc:
-                return {"reply": f"My language core is unreachable ({exc}). Local skills remain available.", "refresh": []}
+                hint = ""
+                msg = str(exc)
+                if "404" in msg:
+                    hint = (" The local model name looks wrong — run 'ollama list' "
+                            "and put an exact name from it as JARVIS_OLLAMA_MODEL in .env.")
+                elif "10061" in msg or "refused" in msg:
+                    hint = " My local model server (Ollama) seems to be off — start it with 'ollama serve'."
+                return {"reply": f"My language core is unreachable ({msg}).{hint} Local skills remain available.", "refresh": []}
         return {
             "reply": "I did not recognise that command, and my language core is offline. "
                      "Say 'what can you do' for my current abilities, or add JARVIS_OPENAI_API_KEY to .env for full conversation.",

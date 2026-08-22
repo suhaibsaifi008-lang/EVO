@@ -6,6 +6,7 @@ import subprocess
 import time
 import webbrowser
 from datetime import datetime
+from pathlib import Path
 from urllib.parse import quote_plus
 
 from .config import SHOTS_DIR
@@ -28,6 +29,8 @@ APP_ALIASES = {
     "google chrome": "chrome.exe",
     "edge": "msedge.exe",
     "microsoft edge": "msedge.exe",
+    "brave": "brave.exe",
+    "brave browser": "brave.exe",
     "firefox": "firefox.exe",
     "vs code": "code.cmd",
     "vscode": "code.cmd",
@@ -38,9 +41,65 @@ APP_ALIASES = {
     "word": "winword.exe",
     "excel": "excel.exe",
     "powerpoint": "powerpnt.exe",
+    "notepad++": "notepad++.exe",
+    "vlc": "vlc.exe",
+    "zoom": "Zoom.exe",
+    "control panel": "control.exe",
+    "whatsapp": "WhatsApp.exe",
+    "telegram": "Telegram.exe",
+    "signal": "Signal.exe",
+    "settings": "ms-settings:",
+    "pc settings": "ms-settings:",
+    "camera": "microsoft.windows.camera:",
 }
 
+# Web-first destinations: opened in the browser when no native app exists.
+SITES = {
+    "youtube": "https://www.youtube.com",
+    "google": "https://www.google.com",
+    "gmail": "https://mail.google.com",
+    "mail": "https://mail.google.com",
+    "maps": "https://maps.google.com",
+    "drive": "https://drive.google.com",
+    "github": "https://github.com",
+    "reddit": "https://www.reddit.com",
+    "instagram": "https://www.instagram.com",
+    "facebook": "https://www.facebook.com",
+    "twitter": "https://x.com",
+    "x": "https://x.com",
+    "whatsapp web": "https://web.whatsapp.com",
+    "chatgpt": "https://chatgpt.com",
+    "gemini": "https://gemini.google.com",
+    "copilot": "https://copilot.microsoft.com",
+    "microsoft copilot": "https://copilot.microsoft.com",
+    "netflix": "https://www.netflix.com",
+    "prime video": "https://www.primevideo.com",
+    "amazon": "https://www.amazon.in",
+    "flipkart": "https://www.flipkart.com",
+    "linkedin": "https://www.linkedin.com",
+    "scholarships": "https://scholarships.gov.in",
+}
+
+BROWSER_ALIASES = {
+    "brave": ["brave", "brave.exe"],
+    "brave browser": ["brave", "brave.exe"],
+    "chrome": ["chrome", "chrome.exe"],
+    "google chrome": ["chrome", "chrome.exe"],
+    "edge": ["msedge", "msedge.exe"],
+    "microsoft edge": ["msedge", "msedge.exe"],
+    "firefox": ["firefox", "firefox.exe"],
+}
+
+FILLER_RE = re.compile(
+    r"^(?:the|my|a|an)\s+|\s+(?:app|application|program|please|now|quickly)$"
+)
+
 URL_RE = re.compile(r"^(https?://|www\.)\S+$", re.IGNORECASE)
+DOMAIN_RE = re.compile(r"^[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)+(/[^\s]*)?$", re.IGNORECASE)
+
+
+def _is_web_address(query: str) -> bool:
+    return bool(URL_RE.match(query) or ("." in query and DOMAIN_RE.match(query)))
 
 
 def _run_ps(script: str, timeout: int = 15) -> str:
@@ -56,21 +115,74 @@ def _run_ps(script: str, timeout: int = 15) -> str:
     return (result.stdout or "").strip()
 
 
-def open_target(query: str) -> str:
+def _launch_uri(target: str) -> str:
+    os.startfile(target)  # noqa: S606
+    return target
+
+
+def _resolve_browser(browser: str) -> str | None:
+    for name in BROWSER_ALIASES.get(browser.strip().lower(), []):
+        resolved = shutil.which(name) or shutil.which(f"{name}.exe")
+        if resolved:
+            return resolved
+        lnk = _resolve_start_menu(name if name.endswith(".exe") else f"{name}.exe")
+        if lnk and lnk.lower().endswith(".exe"):
+            return lnk
+    return None
+
+
+def open_in_browser(target: str, browser: str = "") -> str:
+    """Open a URL, site name, or search phrase in a specific browser (or default)."""
+    target = target.strip()
+    lowered = target.lower().strip(" .!?")
+    if _is_web_address(lowered):
+        url = lowered if lowered.startswith("http") else f"https://{lowered}"
+    elif lowered in SITES:
+        url = SITES[lowered]
+    else:
+        url = f"https://www.bing.com/search?q={quote_plus(target)}"
+    exe = _resolve_browser(browser) if browser else None
+    if exe:
+        subprocess.Popen([exe, "--new-window", url], creationflags=CREATE_NO_WINDOW)
+        return f"{url} in {_browser_label(exe)}"
+    webbrowser.open(url)
+    return url
+
+
+def _browser_label(exe_path: str) -> str:
+    stem = Path(exe_path).stem.lower()
+    return {"brave": "Brave", "chrome": "Chrome", "msedge": "Edge", "firefox": "Firefox"}.get(stem, stem)
+
+
+def open_target(query: str, browser: str = "") -> str:
     query = query.strip().lower()
+    while True:
+        stripped = FILLER_RE.sub("", query).strip()
+        if stripped == query or not stripped:
+            break
+        query = stripped
     if not query:
         raise ValueError("Nothing to open")
-    if URL_RE.match(query):
+    if browser:
+        return open_in_browser(query, browser)
+    if _is_web_address(query):
         url = query if query.startswith("http") else f"https://{query}"
         webbrowser.open(url)
         return url
     if query in APP_ALIASES:
-        exe = APP_ALIASES[query]
-        resolved = shutil.which(exe) or _resolve_start_menu(exe)
+        alias = APP_ALIASES[query]
+        if alias.endswith(":"):
+            _launch_uri(alias)
+            return query
+        resolved = shutil.which(alias) or shutil.which(f"{alias}.exe") or _resolve_start_menu(alias)
         if resolved:
             os.startfile(resolved)  # noqa: S606
             return query
-        raise FileNotFoundError(f"Could not find {exe} on this machine")
+        if query in SITES:
+            return open_in_browser(query)
+        raise FileNotFoundError(f"Could not find {alias} on this machine")
+    if query in SITES:
+        return open_in_browser(query)
     resolved = shutil.which(query) or shutil.which(f"{query}.exe")
     if resolved:
         os.startfile(resolved)  # noqa: S606

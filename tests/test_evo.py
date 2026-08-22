@@ -286,7 +286,7 @@ class TestLLMRouting:
         seen = {}
         monkeypatch.setattr(llm, "_completion", lambda base, key, payload, timeout=60: seen.update(base=base) or {"choices": [{"message": {"content": "PRIMARY"}}]})
         assert llm.chat([{"role": "user", "content": "hi"}]) == "PRIMARY"
-        assert "3001" in seen["base"] or "openai" in seen["base"]
+        assert seen["base"] == config.OPENAI_BASE_URL
 
 
 class TestMissionResume:
