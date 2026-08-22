@@ -103,10 +103,9 @@ def search(query: str, top: int = 6) -> list[dict]:
     seen_paths: set[str] = set()
     out = []
     for score, row in scored:
-        key = f"{row['path']}:{row['id'] // 3}"
-        if key in seen_paths:
+        if row["path"] in seen_paths:
             continue
-        seen_paths.add(key)
+        seen_paths.add(row["path"])
         out.append({"path": row["path"], "title": row["title"], "score": score, "snippet": row["chunk"][:340]})
         if len(out) >= top:
             break

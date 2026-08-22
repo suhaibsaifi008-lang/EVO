@@ -18,6 +18,19 @@ def temp_db(tmp_path, monkeypatch):
 
 def _no_browsers(monkeypatch):
     monkeypatch.setattr(pc, "_resolve_browser", lambda name: None)
+    monkeypatch.setattr(pc, "default_browser_exe", lambda: None)
+
+
+def _no_discovery(monkeypatch):
+    """Keep app resolution hermetic: no real Start Menu scan / Store app lookup."""
+    monkeypatch.setattr(pc, "_lnk_index", lambda: {})
+    monkeypatch.setattr(pc, "_uwp_index", lambda: {})
+
+
+@pytest.fixture(autouse=True)
+def hermetic_discovery(monkeypatch):
+    _no_discovery(monkeypatch)
+    _no_browsers(monkeypatch)
 
 
 class TestOpenTarget:
@@ -26,6 +39,23 @@ class TestOpenTarget:
         monkeypatch.setattr("webbrowser.open", lambda u: opened.append(u))
         assert pc.open_target("copilot") == "https://copilot.microsoft.com"
         assert opened == ["https://copilot.microsoft.com"]
+
+    def test_store_app_launched_when_installed(self, monkeypatch):
+        seen = []
+        monkeypatch.setattr(pc.os, "startfile", lambda p: seen.append(p))
+        monkeypatch.setattr(
+            pc, "_uwp_index",
+            lambda: {"microsoft copilot": "Microsoft.Copilot_8wekyb3d8bbwe!App"},
+        )
+        assert pc.open_target("copilot") == "copilot"
+        assert any("Microsoft.Copilot" in str(p) for p in seen)
+
+    def test_start_menu_shortcut_launch(self, monkeypatch):
+        seen = []
+        monkeypatch.setattr(pc.os, "startfile", lambda p: seen.append(p))
+        monkeypatch.setattr(pc, "_lnk_index", lambda: {"valorant": r"C:\Riot Games\Valorant.lnk"})
+        assert pc.open_target("valorant") == "valorant"
+        assert seen == [r"C:\Riot Games\Valorant.lnk"]
 
     def test_youtube_is_a_site(self, monkeypatch):
         opened = []
@@ -39,8 +69,7 @@ class TestOpenTarget:
         pc.open_target("the youtube app")
         assert opened == ["https://www.youtube.com"]
 
-    def test_unknown_app_still_raises(self, monkeypatch):
-        _no_browsers(monkeypatch)
+    def test_unknown_app_still_raises(self):
         with pytest.raises(FileNotFoundError):
             pc.open_target("zzz_not_real_zzz")
 
@@ -50,11 +79,13 @@ class TestOpenTarget:
         pc.open_target("example.com")
         assert opened == ["https://example.com"]
 
-    def test_open_in_browser_search_phrase(self, monkeypatch):
+    def test_open_in_browser_search_phrase_uses_default_engine_fallback(self, monkeypatch):
         opened = []
         monkeypatch.setattr("webbrowser.open", lambda u: opened.append(u))
         url = pc.open_in_browser("best scholarships for abroad studies")
-        assert "bing.com/search?q=" in url
+        # Never Bing: fall back to DuckDuckGo when no browser exe can be resolved.
+        assert "bing.com" not in url
+        assert "duckduckgo.com/?q=" in url
         assert opened
 
     def test_open_in_browser_with_browser(self, monkeypatch):
@@ -67,6 +98,17 @@ class TestOpenTarget:
         assert "Brave" in result
         assert launched and launched[0][0] == "C:/Apps/brave.exe"
         assert "youtube.com" in launched[0][2]
+
+    def test_search_phrase_passed_raw_to_browser_engine(self, monkeypatch):
+        launched = []
+        monkeypatch.setattr(
+            pc, "_resolve_browser", lambda name: "C:/Apps/brave.exe" if "brave" in name else None
+        )
+        monkeypatch.setattr(pc.subprocess, "Popen", lambda cmd, **k: launched.append(cmd) or object())
+        pc.open_in_browser("best budget mechanical keyboards", "brave")
+        # Plain text goes to the browser untouched -> its OWN default search engine.
+        assert launched[0][2] == "best budget mechanical keyboards"
+        assert "bing.com" not in launched[0][2]
 
 
 class TestOpenIntents:

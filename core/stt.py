@@ -42,12 +42,21 @@ def last_error() -> str:
 
 
 def available() -> bool:
-    """True when offline transcription can run right now — never downloads."""
+    """True when offline transcription can run right now - never downloads."""
     try:
         import vosk  # noqa: F401
     except Exception:
         return False
     return VOSK_DIR.exists() and any(VOSK_DIR.iterdir())
+
+
+def prewarm() -> bool:
+    """Load (or download once) the offline model so the first mic press is instant."""
+    try:
+        _get_model()
+        return True
+    except Exception:
+        return False
 
 
 def _pcm_from_wav(data: bytes) -> tuple[int, int, bytes]:

@@ -95,11 +95,27 @@ async def lifespan(app: FastAPI):
     import threading as _threading
 
     _threading.Thread(target=_ambient_vision_loop, daemon=True, name="evo-ambient-vision").start()
+
+    def _prewarm_stt() -> None:
+        try:
+            from core import stt
+
+            stt.prewarm()
+        except Exception:
+            pass
+
+    _threading.Thread(target=_prewarm_stt, daemon=True, name="evo-stt-prewarm").start()
     yield
     try:
         from core import watchers
 
         watchers.engine.stop()
+    except Exception:
+        pass
+    try:
+        from core import telegram_link
+
+        telegram_link.stop()
     except Exception:
         pass
     dispatcher.stop()
@@ -243,6 +259,7 @@ def health() -> dict:
 def get_settings() -> dict:
     return {
         "name": config.ASSISTANT_NAME,
+        "user_address": config.USER_ADDRESS,
         "briefing_enabled": db.get_setting("briefing_enabled", "0") == "1",
         "briefing_time": db.get_setting("briefing_time", "08:00"),
         "city": db.get_setting("city", ""),

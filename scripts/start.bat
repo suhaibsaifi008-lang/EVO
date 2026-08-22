@@ -1,6 +1,6 @@
 @echo off
 setlocal
-cd /d "%~dp0"
+cd /d "%~dp0.."
 
 if not exist .venv (
   py -3 -m venv .venv || python -m venv .venv || goto :error
@@ -11,7 +11,7 @@ python -m pip install --quiet --disable-pip-version-check -r requirements.txt ||
 
 start "" .venv\Scripts\pythonw.exe evo_tray.pyw
 start "" .venv\Scripts\pythonw.exe evo_ear.pyw
-echo JARVIS is starting in the system tray (ear is listening for "Hey Jarvis")...
+echo EVO is starting in the system tray (ear is listening for the wake word)...
 goto :eof
 
 :error

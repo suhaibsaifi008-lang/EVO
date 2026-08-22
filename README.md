@@ -1,90 +1,58 @@
-# E.V.O — Final
+# E.V.O — Personal Intelligence
 
-A local personal assistant in the JARVIS tradition. Hears "Hey Jarvis" anywhere, transcribes commands **fully offline**, speaks with emotional neural voices, sees your screen, remembers everything across restarts, learns permanent skills, runs resumable background missions, guards your system with watchers, texts you on Telegram, drafts your email, drives your mouse (with permission), answers from your own documents, builds professional websites, and pushes alerts to your phone.
+A local personal assistant in the JARVIS tradition. Hears the wake word anywhere, transcribes commands **fully offline**, speaks with neural voices, sees your screen, remembers everything across restarts, learns permanent skills, runs resumable background missions, guards your system with watchers, texts you on Telegram, drafts your email, drives your mouse (with permission), answers from your own documents, builds professional websites, and pushes alerts to your phone.
 
 ## The complete ability map
 
-**Senses** — wake-word ear (local model) · offline Vosk transcription · screen-free voice loop (speak → he answers aloud) · neural TTS with alert/calm/warm tones · screen vision · ambient window awareness · opt-in ambient vision · welcome-back greeting after long absences
+**Senses** — wake-word ear (local model) · offline Vosk transcription · screen-free voice loop (speak → it answers aloud) · neural TTS with alert/calm/warm tones · screen vision · ambient window awareness · opt-in ambient vision · welcome-back greeting after long absences
 
 **Mind** — agentic brain (~50 tools) · Deep Thought ensemble · Deep Mode self-critique · fast/strong model routing · feedback memory ("from now on always...") · habit engine with skill proposals · 3-layer persistent memory · relevant-knowledge injection
 
-**Body & work** — app/web launching · screenshots · volume/media · GUI control incl. vision-guided clicking *(gated)* · coding sandbox w/ self-debugging · AI worker teams · resumable missions (up to 200 steps) · watchers (battery/disk/web/news) · reminders/timers/alarms · briefing v2 (calendar + schedule + weather + battery)
+**Body & work** — app/web launching (Start Menu + Microsoft Store apps) · screenshots · volume/media · GUI control incl. vision-guided clicking *(gated)* · coding sandbox w/ self-debugging · AI worker teams · resumable missions (up to 200 steps) · watchers (battery/disk/web/news) · reminders/timers/alarms · briefing v2 (calendar + schedule + weather + battery)
 
 **Reach** — Telegram presence · ntfy phone push (auto on watcher/project events) · email draft-first · calendar via iCal feed · YouTube lecture summaries · Home Assistant smart-home hook · file RAG over your folders · Websmith site builder · native chart/PDF generation
-
-## Run
-
-```powershell
-start.bat        # first time: installs deps, starts tray + ear + HUD
-stop-evo.bat  # stop everything
-```
-
-Configure optional powers in `.env` (see `.env.example`): Telegram token, mail credentials, ntfy topic, Home Assistant, fast model, satellite ear URL. Calendar: paste your secret iCal URL in Setup.
-
-## Trust model
-
-Code execution, GUI control and real email sending are each separately gated (voice approval and/or Setup toggles). Every tool action lands in the audit ledger (System tab). Shutdown/restart always asks. Telegram replies only to your paired chat ID.
-
-## Tests
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-pytest tests -q
-```
-
-163 tests cover every subsystem: intents, agent loop, skills forge, senses, missions/resume, watchers, telegram pairing, mail gating, GUI gating, RAG, websmith, audit, failover routing, tones, corrections, habits, routing, calendar parsing, push, reports, welcome-back.
-
-## Notes
-
-- Server binds localhost only; data lives in `data/` — delete `jarvis.db` to factory-reset.
-- The spoken call sign remains "hey jarvis" (pretrained audio model); custom-phrase training possible later.
-- First ear run downloads a ~40MB local speech model once.
-
-## The seven powers (Mark III)
-
-| Power | What it means |
-|---|---|
-| **Phone presence** | Text your bot on Telegram from anywhere; EVO answers and acts on your PC |
-| **Watchers** | Background sentinels: *"warn me when battery hits 20%"*, *"watch this page"*, *"keep an eye on AI news"* — announced aloud when they trigger |
-| **GUI control** *(gated)* | Moves the mouse, clicks, types, hotkeys — plus vision-guided clicking: *"click the Export button"* |
-| **Email** *(draft-first)* | Reads your inbox, drafts replies; real sending is double-gated (your approval + Setup toggle) |
-| **Long missions** | Up to 200-step background projects with checkpoint/resume — pause overnight, continue tomorrow |
-| **File RAG** | *"index_folder D:\Documents"* → EVO answers questions from *your* files |
-| **Offline brain** | If the primary LLM router is down, falls back to local Ollama automatically |
-
-Plus everything from Mark II: agentic brain, skill forge, deep thought ensemble, deep-mode critique, persistent 3-layer memory, screen vision, ambient awareness, neural voice, wake word ear, coding sandbox with self-debugging, AI worker teams, scheduling + daily briefing, routines.
 
 ## Run on Windows
 
 Prerequisites: [Python 3.11+](https://www.python.org/downloads/) and Chrome/Edge for speech input.
 
 ```powershell
-cd evo   (folder may still be named jarvis)
-py -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-start.bat equivalent: double-click start.bat
+cd EVO
+scripts\start.bat        # first time: installs deps, starts tray + ear + console
+scripts\stop-evo.bat     # stop everything
 ```
 
-`start.bat` installs everything, starts the **tray app**, the **wake-word ear**, and opens the HUD.
-`stop-evo.bat` stops it all. Manual: `uvicorn main:app --port 8420`.
+`start.bat` installs everything, starts the **tray app**, the **wake-word ear**, and opens the console.
+Manual server run: `uvicorn main:app --port 8420`.
 
-## Configuration (.env)
+### Scripts
 
-Copy `.env.example` → `.env`. Sections: primary LLM (FreeLLMAPI or any OpenAI-compatible), Ollama fallback, identity (`JARVIS_NAME=EVO`), Telegram token, mail credentials. Everything optional except a brain (router *or* Ollama).
+| File | Purpose |
+|---|---|
+| `scripts/start.bat` | One-time setup + launch tray/ear/console |
+| `scripts/stop-evo.bat` | Stop all EVO processes |
+| `scripts/install_autostart.bat` | Launch EVO automatically at login (run as admin) |
+| `scripts/remove_autostart.bat` | Remove autostart entries |
+| `scripts/build_exe.bat` | Build a standalone `dist\EVO\EVO.exe` |
+| `scripts/evo_silent.vbs` | Start the server with no visible window |
 
-## Autonomy & trust
+Entry points live at the repo root: `main.py` (FastAPI server), `evo_app.pyw` (desktop app), `evo_tray.pyw` (system tray), `evo_ear.pyw` (wake-word ear).
 
-- Code execution: asks per-run unless "run own code" enabled in Setup
-- GUI control: fully disabled until enabled in Setup
-- Email sending: needs your spoken approval AND the Setup toggle; drafts always shown first
-- Every tool action is written to an audit ledger (System tab shows recent actions)
-- Shutdown/restart always requires explicit confirmation
-- Telegram responds only to your paired chat ID
+Configure optional powers in `.env` (see `.env.example`): Telegram token, mail credentials, ntfy topic, Home Assistant, fast model, satellite ear URL. Calendar: paste your secret iCal URL in Setup.
+
+## Apps & search behaviour
+
+- **Open anything**: "open Valorant", "open Copilot", "open Spotify" — EVO resolves apps from its built-in alias table, every Start Menu shortcut (all users), Microsoft Store / packaged apps, and PATH executables, then verifies the window appeared.
+- **No forced search engine**: searches are handed to **your default browser** (from Windows' own default-app setting) as plain text, so they run through that browser's configured search engine — Brave Search, Google, whatever you chose. EVO never forces Bing.
+
+## Trust model
+
+Code execution, GUI control and real email sending are each separately gated (voice approval and/or Setup toggles). Every tool action lands in the audit ledger (System tab). Shutdown/restart always asks. Telegram replies only to your paired chat ID.
 
 ## Voice commands to try
 
-- "Hey Jarvis" → chime → speak naturally (agent mode has no fixed phrases)
+- Wake word → chime → speak naturally (agent mode has no fixed phrases)
+- "Open Copilot" · "Open Valorant" · "Search for cheap flights to Tokyo"
 - "Index my documents folder, then what did I write about the insurance claim?"
 - "Start a project: research the 5 best budget monitors, compare them, save a report"
 - "Learn the skill: check my public IP and log it"
@@ -100,10 +68,11 @@ Copy `.env.example` → `.env`. Sections: primary LLM (FreeLLMAPI or any OpenAI-
 pytest tests -q
 ```
 
-139 tests cover intents, agent loop, skills, senses, forge, missions, watchers, telegram pairing, mail gating, GUI gating, RAG, websmith, audit, and failover routing.
+180+ tests cover every subsystem: intents, app discovery/opening, agent loop, skills forge, senses, offline voice, missions/resume, watchers, telegram pairing, mail gating, GUI gating, RAG, websmith, audit, failover routing, tones, corrections, habits, routing, calendar parsing, push, reports.
 
 ## Notes
 
-- Server binds localhost only. Data in `data/` (SQLite) — delete `jarvis.db` to factory-reset.
+- Server binds localhost only; data lives in `data/` — delete `data/evo.db` to factory-reset.
 - `.env` holds secrets; keep it private (it's git-ignored).
-- The spoken call sign remains "hey jarvis" (pretrained model); rename training is possible later via openWakeWord custom models.
+- The spoken call sign remains "hey jarvis" (pretrained audio model); custom-phrase training possible later.
+- First server start downloads a ~40MB local speech model once (used by the mic's offline fallback).

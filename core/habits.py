@@ -4,17 +4,17 @@ from . import db
 from .scheduler import dispatcher
 
 CATEGORIES = {
-    "schedule": (r"\bremind|timer|alarm|wake me|briefing\b",),
-    "launch": (r"\bopen\b|\blaunch\b|\brun .*(app|program)\b",),
-    "research": (r"\bsearch|research|look up|google\b|\blearn about\b|\bwhat do you know\b",),
-    "coding": (r"\bwrite .* (script|code|program)|\brun the script|\bdebug\b|\bworkspace\b",),
-    "system": (r"\bscreenshot|battery|cpu|ram|status|diagnostics|volume|lock\b",),
-    "media": (r"\bplay|pause|next track|previous track|music|youtube\b",),
-    "email": (r"\bemail|inbox|mail\b",),
-    "memory": (r"\bremember|forget|what is my\b",),
+    "schedule": (r"\b(?:remind|timer|alarm|wake me|briefing)\b",),
+    "launch": (r"\bopen\b|\blaunch\b|\brun .*(?:app|program)\b",),
+    "research": (r"\b(?:search|research|look up|google)\b|\blearn about\b|\bwhat do you know\b",),
+    "coding": (r"\bwrite .*(?:script|code|program)\b|\brun the script\b|\bdebug\b|\bworkspace\b",),
+    "system": (r"\b(?:screenshot|battery|cpu|ram|status|diagnostics|volume|lock)\b",),
+    "media": (r"\b(?:play|pause|next track|previous track|music|youtube)\b",),
+    "email": (r"\b(?:email|inbox|mail)\b",),
+    "memory": (r"\b(?:remember|forget)\b|\bwhat is my\b",),
     "projects": (r"\bproject\b|\bresume project\b",),
-    "web_build": (r"\bwebsite|build me a site\b",),
-    "documents": (r"\bindex_folder|my documents|my files\b",),
+    "web_build": (r"\bwebsite\b|\bbuild me a site\b",),
+    "documents": (r"\bindex_folder\b|\bmy documents\b|\bmy files\b",),
 }
 
 

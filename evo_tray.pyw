@@ -7,10 +7,9 @@ import webbrowser
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-from core.config import DATA_DIR, ROOT  # noqa: E402
-from core.config import ASSISTANT_NAME  # noqa: E402
+from core.config import ASSISTANT_NAME, HOST, PORT  # noqa: E402
 
-SERVER_PORT = 8420
+SERVER_PORT = PORT
 
 
 def serve() -> None:
@@ -27,7 +26,7 @@ def wait_port(timeout: float = 20.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            with socket.create_connection(("127.0.0.1", SERVER_PORT), timeout=1):
+            with socket.create_connection((HOST, SERVER_PORT), timeout=1):
                 return True
         except OSError:
             time.sleep(0.3)
@@ -69,7 +68,7 @@ def main() -> None:
 
     menu = pystray.Menu(
         pystray.MenuItem("Open Console", on_open, default=True),
-        pystray.MenuItem("Quit JARVIS", on_quit),
+        pystray.MenuItem(f"Quit {ASSISTANT_NAME}", on_quit),
     )
     icon = pystray.Icon("evo", make_icon_image(), f"{ASSISTANT_NAME} - personal assistant", menu)
 

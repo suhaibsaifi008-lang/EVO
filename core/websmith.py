@@ -42,7 +42,7 @@ def _valid_html(html: str) -> bool:
 def _derive_pages(brief: str, provided: list[str] | None) -> list[str]:
     if provided:
         cleaned = [re.sub(r"[^a-z0-9-]+", "", p.lower()).strip("-") for p in provided]
-        pages = [p or "index" for p in cleaned if p]
+        pages = list(dict.fromkeys(p or "index" for p in cleaned if p))
     else:
         pages = ["index"]
         lowered = brief.lower()

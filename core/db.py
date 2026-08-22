@@ -323,27 +323,27 @@ def track_repeat(text: str) -> dict | None:
     if len(normalized.split()) < 2:
         return None
     phash = hashlib.sha1(normalized.encode()).hexdigest()[:24]
+    propose = False
     with _lock, _connect() as conn:
         row = conn.execute("SELECT * FROM repeats WHERE phrase_hash=?", (phash,)).fetchone()
         if row:
             count = row["count"] + 1
-            proposed = row["proposed"]
             conn.execute(
                 "UPDATE repeats SET count=?, last_at=?, sample=? WHERE phrase_hash=?",
                 (count, time.time(), text[:200], phash),
             )
         else:
             count = 1
-            proposed = 0
             conn.execute(
                 "INSERT INTO repeats(phrase_hash, sample, count, last_at) VALUES(?,?,?,?)",
                 (phash, text[:200], count, time.time()),
             )
-    if count >= 3 and not proposed:
-        with _lock, _connect() as conn:
-            conn.execute("UPDATE repeats SET proposed=1 WHERE phrase_hash=?", (phash,))
-        return {"sample": text[:200], "count": count}
-    return None
+        if count >= 3:
+            cur = conn.execute(
+                "UPDATE repeats SET proposed=1 WHERE phrase_hash=? AND proposed=0", (phash,)
+            )
+            propose = cur.rowcount > 0
+    return {"sample": text[:200], "count": count} if propose else None
 
 
 def log_message(role: str, content: str) -> None:

@@ -1,5 +1,6 @@
 """Office & data intelligence — read/edit DOCX/XLSX/PPTX, analyze spreadsheets."""
 import os
+from datetime import datetime
 from pathlib import Path
 
 from .config import DATA_DIR
@@ -38,14 +39,14 @@ def read_office(path: str, max_chars: int = 4000) -> str:
     elif ext in (".xlsx", ".xlsm"):
         import openpyxl
 
-        wb = openpyxl.load_workbook(str(p), read_only=True, data_only=True)
         parts = []
-        for ws in wb.worksheets[:6]:
-            parts.append(f"[sheet: {ws.title}] {ws.max_row} rows x {ws.max_column} cols")
-            for row in ws.iter_rows(min_row=1, max_row=8, values_only=True):
-                vals = [str(v) for v in row if v is not None][:12]
-                if vals:
-                    parts.append("  " + " | ".join(vals))
+        with openpyxl.load_workbook(str(p), read_only=True, data_only=True) as wb:
+            for ws in wb.worksheets[:6]:
+                parts.append(f"[sheet: {ws.title}] {ws.max_row} rows x {ws.max_column} cols")
+                for row in ws.iter_rows(min_row=1, max_row=8, values_only=True):
+                    vals = [str(v) for v in row if v is not None][:12]
+                    if vals:
+                        parts.append("  " + " | ".join(vals))
         text = "\n".join(parts)
     elif ext == ".pptx":
         try:
@@ -132,4 +133,4 @@ def re_slug(name: str) -> str:
     import re
 
     base = re.sub(r"[^a-zA-Z0-9_-]+", "-", (name or "").strip())[:40].strip("-")
-    return base or f"doc-{int(os.times()[4])}"
+    return base or f"doc-{datetime.now().strftime('%Y%m%d_%H%M%S')}"

@@ -1,6 +1,6 @@
 @echo off
 rem Builds a standalone Windows executable: dist\EVO\EVO.exe
-cd /d "%~dp0"
+cd /d "%~dp0.."
 call .venv\Scripts\activate.bat
 
 pyinstaller --noconfirm --clean --windowed --name EVO ^

@@ -11,7 +11,7 @@ MAX_STEPS = 6
 
 SYSTEM_TEMPLATE = (
     "You are {name}, an autonomous AI butler running locally on the user's Windows PC. "
-    "Address the user as '{address}'. Style: precise, dry wit, never verbose â€” spoken replies under 80 words.\n"
+    "Address the user as '{address}'. Style: precise, dry wit, never verbose — spoken replies under 80 words.\n"
     "You control this PC through TOOLS. To use one, reply with ONLY a JSON object:\n"
     '{{"tool": "tool_name", "args": {{...}}}}\n'
     "You will receive its result, then continue. When you have everything you need (or for plain conversation), "
@@ -19,7 +19,7 @@ SYSTEM_TEMPLATE = (
     "Rules:\n"
     "- One tool call per reply. Never invent tools. Never output anything except the single JSON object.\n"
     "- Prefer tools over guessing facts. Combine multiple facts into ONE final say.\n"
-    "- Tools named skill_* are permanent abilities the user taught you â€” prefer them when relevant.\n"
+    "- Tools named skill_* are permanent abilities the user taught you — prefer them when relevant.\n"
     "- For genuinely hard analysis, strategy or math questions, use deep_thought instead of answering shallowly.\n"
     "- If a tool returns DENIED or TOOL_ERROR, explain gracefully instead of retrying twice.\n"
     "- Destructive power actions (shutdown/restart) are NOT available; if asked, say they need explicit setup.\n"
@@ -204,4 +204,4 @@ def run(
         messages.append({"role": "assistant", "content": raw})
         messages.append({"role": "user", "content": f"TOOL RESULT ({name}):\n{observation[:2500]}"})
 
-    return "That task needed more steps than I am allowed in one go â€” I have stopped to avoid surprises."
+    return "That task needed more steps than I am allowed in one go — I have stopped to avoid surprises."

@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 import webbrowser
 from datetime import datetime
@@ -90,12 +91,41 @@ BROWSER_ALIASES = {
     "firefox": ["firefox", "firefox.exe"],
 }
 
+# Common per-user / per-machine install paths that are NOT on PATH.
+_BROWSER_KNOWN_PATHS = {
+    "brave": [
+        r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\Application\brave.exe",
+        r"%PROGRAMFILES%\BraveSoftware\Brave-Browser\Application\brave.exe",
+        r"%PROGRAMFILES(x86)%\BraveSoftware\Brave-Browser\Application\brave.exe",
+    ],
+    "chrome": [
+        r"%PROGRAMFILES%\Google\Chrome\Application\chrome.exe",
+        r"%PROGRAMFILES(x86)%\Google\Chrome\Application\chrome.exe",
+        r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe",
+    ],
+    "msedge": [
+        r"%PROGRAMFILES(x86)%\Microsoft\Edge\Application\msedge.exe",
+        r"%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe",
+    ],
+    "firefox": [
+        r"%PROGRAMFILES%\Mozilla Firefox\firefox.exe",
+        r"%PROGRAMFILES(x86)%\Mozilla Firefox\firefox.exe",
+    ],
+}
+
 FILLER_RE = re.compile(
     r"^(?:the|my|a|an)\s+|\s+(?:app|application|program|please|now|quickly)$"
 )
 
 URL_RE = re.compile(r"^(https?://|www\.)\S+$", re.IGNORECASE)
 DOMAIN_RE = re.compile(r"^[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)+(/[^\s]*)?$", re.IGNORECASE)
+
+_INDEX_LOCK = threading.Lock()
+_LNK_INDEX: dict[str, str] = {}
+_LNK_TS = 0.0
+_UWP_LOCK = threading.Lock()
+_UWP_INDEX: dict[str, str] = {}
+_UWP_TS = 0.0
 
 
 def _is_web_address(query: str) -> bool:
@@ -120,11 +150,106 @@ def _launch_uri(target: str) -> str:
     return target
 
 
+def _start_menu_dirs() -> list[Path]:
+    dirs: list[Path] = []
+    for env in ("APPDATA", "PROGRAMDATA"):
+        base = os.environ.get(env)
+        if base:
+            d = Path(base) / r"Microsoft\Windows\Start Menu\Programs"
+            if d.exists():
+                dirs.append(d)
+    return dirs
+
+
+def _lnk_index() -> dict[str, str]:
+    """lowercase shortcut name -> .lnk path. Cached for 10 minutes."""
+    global _LNK_INDEX, _LNK_TS
+    with _INDEX_LOCK:
+        now = time.time()
+        if _LNK_INDEX and now - _LNK_TS < 600:
+            return _LNK_INDEX
+        idx: dict[str, str] = {}
+        for base in _start_menu_dirs():
+            for p in base.rglob("*.lnk"):
+                idx.setdefault(p.stem.strip().lower(), str(p))
+        _LNK_INDEX = idx
+        _LNK_TS = now
+        return idx
+
+
+def _uwp_index() -> dict[str, str]:
+    """All packaged (Microsoft Store) apps: lowercase name -> AUMID. Cached."""
+    global _UWP_INDEX, _UWP_TS
+    with _UWP_LOCK:
+        now = time.time()
+        if _UWP_INDEX and now - _UWP_TS < 900:
+            return _UWP_INDEX
+        apps: dict[str, str] = {}
+        try:
+            out = _run_ps(
+                "Get-StartApps | ForEach-Object { \"$($_.Name)|$($_.AppID)\" }", timeout=25
+            )
+            for line in out.splitlines():
+                parts = line.split("|")
+                if len(parts) >= 2:
+                    name = "|".join(parts[:-1]).strip().lower()
+                    appid = parts[-1].strip()
+                    if name and "!" in appid:
+                        apps.setdefault(name, appid)
+        except Exception:
+            pass
+        _UWP_INDEX = apps
+        _UWP_TS = now
+        return apps
+
+
+def launch_uwp(name: str) -> bool:
+    """Launch a packaged/Store app (Copilot, Camera, Xbox...) by fuzzy-exact name."""
+    table = _uwp_index()
+    key = name.strip().lower()
+    appid = table.get(key)
+    if not appid:
+        candidates = [(n, a) for n, a in table.items() if key in n]
+        if len(candidates) == 1:
+            appid = candidates[0][1]
+    if not appid:
+        return False
+    try:
+        _launch_uri(f"shell:appsFolder\\{appid}")
+        return True
+    except Exception:
+        return False
+
+
+def default_browser_exe() -> str | None:
+    """Path of the user's actual default browser (from the https UserChoice key)."""
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice",
+        ) as k:
+            progid = winreg.QueryValueEx(k, "ProgId")[0]
+        with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, rf"{progid}\shell\open\command") as k:
+            cmd = winreg.QueryValueEx(k, None)[0]
+        m = re.match(r'^"?([^"]+?\.exe)"?', cmd, re.IGNORECASE)
+        exe = m.group(1) if m else cmd.split()[0].strip('"')
+        return exe if exe and os.path.exists(exe) else None
+    except Exception:
+        return None
+
+
 def _resolve_browser(browser: str) -> str | None:
-    for name in BROWSER_ALIASES.get(browser.strip().lower(), []):
+    stem = browser.strip().lower()
+    for name in BROWSER_ALIASES.get(stem, [stem]):
         resolved = shutil.which(name) or shutil.which(f"{name}.exe")
         if resolved:
             return resolved
+        for raw in _BROWSER_KNOWN_PATHS.get(name, []):
+            p = os.path.expandvars(raw)
+            if os.path.exists(p):
+                return p
         lnk = _resolve_start_menu(name if name.endswith(".exe") else f"{name}.exe")
         if lnk and lnk.lower().endswith(".exe"):
             return lnk
@@ -132,19 +257,29 @@ def _resolve_browser(browser: str) -> str | None:
 
 
 def open_in_browser(target: str, browser: str = "") -> str:
-    """Open a URL, site name, or search phrase in a specific browser (or default)."""
+    """Open a URL, site name, or search phrase in the chosen browser.
+
+    Search phrases are handed to the browser as plain text so it runs them
+    through ITS OWN default search engine (Brave Search, Google, ...), never Bing.
+    """
     target = target.strip()
     lowered = target.lower().strip(" .!?")
     if _is_web_address(lowered):
-        url = lowered if lowered.startswith("http") else f"https://{lowered}"
+        arg = lowered if lowered.startswith("http") else f"https://{lowered}"
     elif lowered in SITES:
-        url = SITES[lowered]
+        arg = SITES[lowered]
     else:
-        url = f"https://www.bing.com/search?q={quote_plus(target)}"
-    exe = _resolve_browser(browser) if browser else None
+        arg = target  # non-URL text: Chromium/Firefox search with their own engine
+    exe = _resolve_browser(browser) if browser else default_browser_exe()
     if exe:
-        subprocess.Popen([exe, "--new-window", url], creationflags=CREATE_NO_WINDOW)
-        return f"{url} in {_browser_label(exe)}"
+        subprocess.Popen([exe, "--new-window", arg], creationflags=CREATE_NO_WINDOW)
+        return f"{arg} in {_browser_label(exe)}"
+    if arg != target:
+        # A concrete URL/site: open via OS default browser association.
+        webbrowser.open(arg)
+        return arg
+    # No browser executable resolvable: neutral search fallback (never Bing).
+    url = f"https://duckduckgo.com/?q={quote_plus(target)}"
     webbrowser.open(url)
     return url
 
@@ -169,6 +304,8 @@ def open_target(query: str, browser: str = "") -> str:
         url = query if query.startswith("http") else f"https://{query}"
         webbrowser.open(url)
         return url
+
+    # 1. Built-in alias table.
     if query in APP_ALIASES:
         alias = APP_ALIASES[query]
         if alias.endswith(":"):
@@ -178,15 +315,33 @@ def open_target(query: str, browser: str = "") -> str:
         if resolved:
             os.startfile(resolved)  # noqa: S606
             return query
-        if query in SITES:
-            return open_in_browser(query)
-        raise FileNotFoundError(f"Could not find {alias} on this machine")
-    if query in SITES:
-        return open_in_browser(query)
+
+    # 2. Start Menu shortcut whose name matches exactly (Valorant, games, tools).
+    lnk = _lnk_index().get(query)
+    if lnk:
+        os.startfile(lnk)  # noqa: S606  (Windows resolves .lnk targets itself)
+        return query
+
+    # 3. Packaged / Microsoft Store apps (Copilot, Camera, Notion...).
+    if launch_uwp(query):
+        return query
+
+    # 4. Direct executable lookup.
     resolved = shutil.which(query) or shutil.which(f"{query}.exe")
     if resolved:
         os.startfile(resolved)  # noqa: S606
         return query
+
+    # 5. Single unambiguous fuzzy match in the Start Menu or Store list.
+    fuzzy_lnk = [p for name, p in _lnk_index().items() if query in name]
+    if len(fuzzy_lnk) == 1:
+        os.startfile(fuzzy_lnk[0])  # noqa: S606
+        return query
+
+    # 6. Known websites as a fallback destination.
+    if query in SITES:
+        return open_in_browser(query)
+
     raise FileNotFoundError(f"I could not find an app called {query}")
 
 
@@ -201,17 +356,25 @@ def _resolve_start_menu(exe: str) -> str | None:
             continue
         for root, _, files in os.walk(base):
             for name in files:
-                if name.lower().startswith(stem) and name.lower().endswith((".lnk", ".exe")):
+                low = name.lower()
+                if not low.endswith((".lnk", ".exe")):
+                    continue
+                file_stem = os.path.splitext(low)[0]
+                # Exact name, or a distinct token match ("brave browser" ~ "Brave.lnk" no,
+                # "valorant" ~ "Valorant.lnk" yes) so 'code' never matches 'codecov'.
+                if file_stem == stem or re.search(rf"(?:^|[\s\-_(]){re.escape(stem)}(?:[\s\-_)]|$)", file_stem):
                     return os.path.join(root, name)
     return None
 
 
 def web_search(query: str, site: str = "") -> str:
-    url = f"https://www.bing.com/search?q={quote_plus(query)}"
+    """Search the web using the user's own browser and its default engine."""
     if site == "youtube":
         url = f"https://www.youtube.com/results?search_query={quote_plus(query)}"
     elif site == "wikipedia":
         url = f"https://en.wikipedia.org/wiki/Special:Search?search={quote_plus(query)}"
+    else:
+        return open_in_browser(query)
     webbrowser.open(url)
     return url
 

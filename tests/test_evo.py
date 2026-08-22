@@ -307,13 +307,21 @@ class TestMissionResume:
         assert "finished properly" in final["result"]
 
     def test_resume_rejects_running_or_empty(self, temp_db):
+        import threading
+
         from core.projects import manager
 
         pid = db.create_project("ghost")
         assert "no saved progress" in manager.resume(pid).lower()
         db.save_project_state(pid, json.dumps([{"role": "user", "content": "x"}]))
         db.set_project_running(pid)
-        assert "already running" in manager.resume(pid).lower()
+        # Simulate a live worker thread for this project: a running project
+        # with an ALIVE worker must refuse to resume.
+        manager._threads[pid] = threading.current_thread()
+        try:
+            assert "already running" in manager.resume(pid).lower()
+        finally:
+            manager._threads.pop(pid, None)
 
 
 class TestAuditLedger:

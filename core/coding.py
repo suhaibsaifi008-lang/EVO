@@ -78,8 +78,8 @@ def run_python(code: str = "", filename: str | None = None, timeout: int = 25) -
         if target.suffix != ".py":
             raise ValueError("Only .py files can be executed")
     else:
-        stamp = datetime.now().strftime("%H%M%S")
-        target = write_file(f"_scratch_{stamp}.py", code)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        target = write_file(f"_scratch_{stamp}_{os.urandom(3).hex()}.py", code)
 
     job = _Job()
     timer = threading.Timer(timeout, job.kill)
@@ -105,5 +105,5 @@ def run_python(code: str = "", filename: str | None = None, timeout: int = 25) -
         "exit": proc.returncode,
         "stdout": (stdout or "")[-3000:],
         "stderr": (stderr or "")[-2000:],
-        "timed_out": proc.returncode is not None and proc.returncode < 0,
+        "timed_out": job.timed_out,
     }

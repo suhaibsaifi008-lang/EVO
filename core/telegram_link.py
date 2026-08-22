@@ -97,3 +97,7 @@ def start(handler) -> bool:
         _thread.start()
         print("[telegram] link online", flush=True)
         return True
+
+
+def stop() -> None:
+    _stop.set()

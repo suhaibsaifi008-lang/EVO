@@ -1,6 +1,6 @@
 @echo off
 setlocal
-cd /d "%~dp0"
+cd /d "%~dp0.."
 
 set "PYW=%CD%\.venv\Scripts\pythonw.exe"
 if not exist "%PYW%" (

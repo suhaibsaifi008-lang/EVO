@@ -15,13 +15,20 @@ def _unfold(raw: str) -> list[str]:
     return lines
 
 
-def _parse_dt(value: str):
+def _parse_dt(value: str, tzid: str = ""):
     value = value.strip()
     m = re.match(r"^(\d{8})T(\d{6})(Z)?$", value)
     if m:
         dt = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S")
         if m.group(3):
             dt = dt.replace(tzinfo=timezone.utc).astimezone()
+        elif tzid:
+            try:
+                from zoneinfo import ZoneInfo
+
+                dt = dt.replace(tzinfo=ZoneInfo(tzid)).astimezone()
+            except Exception:
+                pass
         return dt.replace(tzinfo=None)
     m = re.match(r"^(\d{8})$", value)
     if m:
@@ -53,11 +60,15 @@ def fetch_events(days: int = 7) -> list[dict]:
         elif current is not None and ":" in line:
             key, _, val = line.partition(":")
             base_key = key.split(";")[0].upper()
+            tzid = ""
+            for param in key.split(";")[1:]:
+                if param.upper().startswith("TZID="):
+                    tzid = param.split("=", 1)[1].strip('"')
             val = val.strip()
             if base_key == "DTSTART":
-                current["start"] = _parse_dt(val)
+                current["start"] = _parse_dt(val, tzid)
             elif base_key == "DTEND":
-                current["end"] = _parse_dt(val)
+                current["end"] = _parse_dt(val, tzid)
             elif base_key == "SUMMARY":
                 current["title"] = val[:160]
             elif base_key == "LOCATION":

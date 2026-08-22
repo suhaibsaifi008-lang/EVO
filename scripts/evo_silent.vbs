@@ -1,10 +1,10 @@
 Set fso = CreateObject("Scripting.FileSystemObject")
 Set sh = CreateObject("WScript.Shell")
-dir = fso.GetParentFolderName(WScript.ScriptFullName)
+dir = fso.GetParentFolderName(fso.GetParentFolderName(WScript.ScriptFullName))
 pyw = dir & "\.venv\Scripts\pythonw.exe"
 
 If Not fso.FileExists(pyw) Then
-  MsgBox "Run start.bat once first so JARVIS can install itself.", 48, "JARVIS"
+  MsgBox "Run scripts\start.bat once first so EVO can install itself.", 48, "EVO"
   WScript.Quit
 End If
 

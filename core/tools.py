@@ -85,7 +85,9 @@ def _open_app(target: str) -> str:
     opened = pc.open_target(target)
     if re.match(r"^(https?://|www\.)\S+$", target.strip(), re.IGNORECASE):
         return f"Opened {opened} in the default browser."
-    check = verify_app_window(target.split()[0][:18], timeout_s=8)
+    words = [w for w in re.findall(r"[A-Za-z0-9#+]+", target) if w.lower() not in ("app", "open", "the", "my")]
+    probe = max(words, key=len)[:18] if words else target[:18]
+    check = verify_app_window(probe, timeout_s=8)
     if check.get("verified"):
         return f"Opened {opened} — verified window '{check['window'][:60]}' is visible."
     return f"Launched {opened}, but I could not confirm a matching window yet ({check.get('reason', '')})."
@@ -154,9 +156,9 @@ def _browse_close() -> str:
 from . import appctl as pc_apps
 
 
-@tool("list_installed_apps", "Enumerate applications installed on this PC.")
-def _installed_apps(limit: int = 40) -> str:
-    rows = pc_apps.list_installed_apps(max(5, min(int(limit), 80)))
+@tool("list_installed_apps", "Enumerate applications installed on this PC (desktop, Store and Start Menu apps).")
+def _installed_apps(limit: int = 120) -> str:
+    rows = pc_apps.list_installed_apps(max(5, min(int(limit), 400)))
     return ", ".join(rows)
 
 
@@ -463,7 +465,8 @@ def _project(goal: str, max_steps: int = 40) -> str:
 def _resume_project(project_id: int) -> str:
     from .projects import manager
 
-    return manager.resume(int(project_id))
+    msg = manager.resume(int(project_id))
+    return msg.split(": ", 1)[1] if msg.startswith("resumed: ") else msg
 
 
 @tool("list_projects", "Show recent background projects and their status.")

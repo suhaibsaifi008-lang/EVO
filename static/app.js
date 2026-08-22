@@ -542,7 +542,16 @@ function setupSpeech() {
       send(text);
     } catch (err) {
       $("sttPreview").textContent = "";
-      toast("Local transcription failed — is the EVO server running?");
+      let detail = "";
+      try {
+        const j = JSON.parse(String((err && err.message) || ""));
+        detail = String(j.detail || "");
+      } catch { detail = String((err && err.message) || ""); }
+      if (detail.includes("unavailable") || detail.includes("model")) {
+        toast(`Offline voice engine: ${detail.slice(0, 160)}`);
+      } else {
+        toast("Local transcription failed — is the EVO server running?");
+      }
     }
   }
 
@@ -714,10 +723,16 @@ if (localStorage.getItem("evo_wake") === "1") {
 }
 
 /* ---------- boot ---------- */
-function greetByHour() {
+async function greetByHour() {
   const h = new Date().getHours();
   const part = h < 12 ? "morning" : h < 18 ? "afternoon" : "evening";
-  $("heroGreeting").textContent = `Good ${part}, sir. Systems online.`;
+  let address = "sir";
+  try {
+    const cfg = await (await fetch("/api/settings")).json();
+    if (cfg.user_address) address = cfg.user_address;
+    if (cfg.name) applyBrand(cfg.name);
+  } catch {}
+  $("heroGreeting").textContent = `Good ${part}, ${address}. Systems online.`;
 }
 
 async function loadConversations() {

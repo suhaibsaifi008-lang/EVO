@@ -1,33 +1,23 @@
-# Fix these three things, in this order. Do not add new architecture, wrappers, or fallback layers — just make these exact changes.
+# Historical troubleshooting notes (superseded)
 
-## 1. Browser is invisible
-In config (wherever `tools.browser.headless` is defined, likely `config.py` or the active preset's config), change:
-    headless: bool = True
-to:
-    headless: bool = False
+These notes describe past issues. For reference, here is how each is
+actually handled in the current code:
 
-Then, separately, confirm Playwright's actual browser binary is downloaded — this is a
-one-time setup step distinct from installing the `playwright` Python package:
-    uv run playwright install chromium
+## 1. Browser visibility
+EVO's automation browser (Playwright) is visible by default. The setting
+lives in the database (`browser_headless`), not config.py — it defaults to
+`0` = visible. One-time setup for Playwright's browser binary:
 
-If it says "already installed," fine. If it downloads something, that was the real problem.
+    .\.venv\Scripts\playwright.exe install chromium
 
-## 2. Apps don't visibly open despite reporting success
-Before touching any code: confirm whether the server process (the one actually running
-`launch_application` / `open_url`) is running in the same session as the interactive
-desktop the user is looking at. Print `sys.platform` at startup and log it. If it's not
-"win32", or if the process was started under a different Windows user/session than the
-one currently logged in and viewing the screen, that is the entire bug — no amount of
-window-launching code will fix a process that isn't allowed to draw on that desktop.
-Do not add retry logic or "verify and relaunch" loops until this is ruled out.
+## 2. Apps not opening
+App launching runs in the same interactive session as the console. EVO now
+resolves apps from: built-in aliases → Start Menu shortcuts (all users) →
+Microsoft Store / packaged apps via Get-StartApps → PATH executables →
+websites. Window verification is built into the `open_app` tool.
 
 ## 3. Microphone permission
-This is not a backend/Python issue. It's the browser's own site-level permission for
-`http://localhost:8000`. Do not add any backend "permission granted" flags, mock
-permission state, or bypass logic. The fix is entirely on the browser side: the user
-needs to open the site settings (padlock icon) for localhost:8000 and set Microphone
-to Allow there. If the app is currently showing its own "permission denied" message even
-after the browser-level permission is granted, check that the frontend is actually
-re-querying `navigator.permissions.query({name: "microphone"})` or re-attempting
-`getUserMedia()` on retry, rather than reading a cached/stale JS variable from the first
-failed attempt.
+The server binds port **8420** (not 8000). Grant microphone permission to
+`http://localhost:8420` and to the desktop app window when prompted. If
+cloud speech is unavailable, EVO falls back to its offline Vosk engine
+automatically; the model (~40MB) downloads once at first server start.

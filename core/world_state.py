@@ -44,9 +44,10 @@ def snapshot(max_age: float = 6.0, force: bool = False) -> dict:
     except Exception:
         pass
 
-    _state.clear()
-    _state.update(state)
-    return dict(_state)
+    with _lock:
+        _state.clear()
+        _state.update(state)
+    return dict(state)
 
 
 def context_line() -> str:

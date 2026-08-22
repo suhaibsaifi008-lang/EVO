@@ -67,10 +67,57 @@ def synthesize(text: str, voice: str = "", tone: str = "") -> Path:
     return out
 
 
+def synthesize_offline(text: str, tone: str = "") -> Path:
+    """Last-resort voice: Windows SAPI rendered to WAV (no internet needed)."""
+    import subprocess
+
+    text = " ".join((text or "").split())[:800]
+    if not text:
+        raise ValueError("empty text")
+    key = hashlib.sha1(f"sapi|{tone}|{text}".encode("utf-8")).hexdigest()[:20] + ".wav"
+    out = TTS_DIR / key
+    if out.exists() and out.stat().st_size > 512:
+        return out
+    safe = text.replace("'", "''")
+    ps = (
+        "Add-Type -AssemblyName System.Speech;"
+        "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer;"
+        f"$s.SetOutputToWaveFile('{out}');"
+        f"$s.Speak('{safe}');"
+        "$s.Dispose()"
+    )
+    tmp = out.with_suffix(".part")
+    ps_tmp = ps.replace(str(out), str(tmp))
+    subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_tmp],
+        capture_output=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        timeout=90,
+        check=True,
+    )
+    if tmp.stat().st_size < 256:
+        raise RuntimeError("SAPI produced no audio")
+    tmp.replace(out)
+    return out
+
+
 def cleanup(max_files: int = 300) -> None:
     files = sorted(TTS_DIR.glob("*.mp3"), key=lambda p: p.stat().st_mtime)
-    for stale in files[:-max_files] if len(files) > max_files else []:
+    wavs = sorted(TTS_DIR.glob("*.wav"), key=lambda p: p.stat().st_mtime)
+    for stale in (files[:-max_files] if len(files) > max_files else []) + (
+        wavs[:-max_files] if len(wavs) > max_files else []
+    ):
         try:
             stale.unlink()
+        except OSError:
+            pass
+    # Orphaned partial downloads from failed syntheses.
+    import time as _time
+
+    cutoff = _time.time() - 3600
+    for part in TTS_DIR.glob("*.part"):
+        try:
+            if part.stat().st_mtime < cutoff:
+                part.unlink()
         except OSError:
             pass

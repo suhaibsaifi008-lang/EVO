@@ -167,16 +167,27 @@ def screenshot_to(path: str) -> str:
 
 
 def search_web(query: str) -> str:
-    result = navigate(f"https://www.bing.com/search?q={query.replace(' ', '+')}")
+    """Search inside EVO's automated browser session (DuckDuckGo HTML, no Bing)."""
+    from urllib.parse import quote_plus
+
+    result = navigate(f"https://html.duckduckgo.com/html/?q={quote_plus(query)}")
     page = _get_page()
     results = []
-    try:
-        for li in page.locator("#b_results > li").all()[:8]:
-            t = li.inner_text().replace("\n", " ").strip()
-            if t:
-                results.append(t[:160])
-    except Exception:
-        pass
+    for sel in ("a.result__a", "a[data-testid='result-title-a']", ".result__body a"):
+        try:
+            anchors = page.locator(sel).all()[:8]
+        except Exception:
+            continue
+        if anchors:
+            for a in anchors:
+                try:
+                    t = " ".join(a.inner_text().split())
+                    if t:
+                        results.append(t[:160])
+                except Exception:
+                    continue
+            if results:
+                break
     if not results:
         return f"Search page loaded ({result['title']}) but no structured results parsed."
     return "\n".join(f"{i+1}. {r}" for i, r in enumerate(results))

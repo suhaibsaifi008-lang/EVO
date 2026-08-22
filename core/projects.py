@@ -71,25 +71,43 @@ class ProjectManager:
         row = db.get_project(pid)
         if not row:
             return f"No project #{pid}."
+        t = self._threads.get(pid)
+        alive = t is not None and t.is_alive()
+        if row["status"] == "running" and alive:
+            return f"Project #{pid} is already running."
         try:
             transcript = json.loads(row.get("state") or "[]")
         except Exception:
             transcript = []
         if not isinstance(transcript, list):
             transcript = []
-        if row["status"] == "running" and transcript:
-            return f"Project #{pid} is already running."
+        if row["status"] == "running" and transcript and not alive:
+            _log(pid, "Detected a dead worker from an interrupted run — resuming.")
         if not transcript:
+            if row["status"] == "running":
+                db.finish_project(pid, "failed", "Interrupted before any progress was saved.")
             return f"Project #{pid} has no saved progress to resume — start a new one instead."
         db.set_project_running(pid)
-        budget = DEFAULT_MAX_STEPS
+        budget = int(row.get("max_steps") or DEFAULT_MAX_STEPS)
+        # Each resume is a fresh session: guarantee real headroom even when the
+        # previous session already consumed its whole budget.
+        used = len([m for m in transcript if m.get("role") == "assistant"])
+        if used >= budget:
+            budget = used + DEFAULT_MAX_STEPS
         self._spawn(pid, row["goal"], transcript, budget)
-        return f"Project #{pid} resumed with a fresh {budget}-step budget."
+        return f"resumed: Project #{pid} resumed with a fresh {budget}-step budget."
 
     def _worker(self, pid: int, goal: str, transcript: list[dict], budget: int) -> None:
         from .agent_loop import parse_json_object
         from .llm import chat
 
+        try:
+            self._worker_inner(pid, goal, transcript, budget, parse_json_object, chat)
+        finally:
+            self._threads.pop(pid, None)
+
+    def _worker_inner(self, pid: int, goal: str, transcript: list[dict], budget: int,
+                      parse_json_object, chat) -> None:
         system = PROJECT_SYSTEM.format(
             name=config.ASSISTANT_NAME,
             address=config.USER_ADDRESS,
@@ -178,7 +196,8 @@ def resume_all_at_boot() -> int:
     try:
         for row in db.list_projects(50):
             if row["status"] == "running":
-                if manager.resume(row["id"]):
+                msg = manager.resume(row["id"])
+                if msg.startswith("resumed"):
                     _log(row["id"], "Server restarted — mission auto-resumed.")
                     dispatcher.publish({
                         "type": "project_done",

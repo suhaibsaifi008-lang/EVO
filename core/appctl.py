@@ -56,7 +56,7 @@ def wait_for_window(target: str, timeout_s: float = 8.0):
         time.sleep(0.4)
 
 
-def list_installed_apps(limit: int = 60) -> list[str]:
+def list_installed_apps(limit: int = 200) -> list[str]:
     names: set[str] = set()
     dirs = []
     for env in ("PROGRAMDATA", "APPDATA"):
@@ -70,24 +70,40 @@ def list_installed_apps(limit: int = 60) -> list[str]:
     try:
         import winreg
 
-        for hive, flag in ((winreg.HKEY_LOCAL_MACHINE, winreg.KEY_READ),
-                           (winreg.KEY_WOW64_32KEY and winreg.HKEY_LOCAL_MACHINE, winreg.KEY_READ | winreg.KEY_WOW64_32KEY)):
+        hives = (
+            (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_READ),
+            (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_READ | winreg.KEY_WOW64_32KEY),
+            (winreg.HKEY_CURRENT_USER, winreg.KEY_READ),
+        )
+        seen_keys: set[int] = set()
+        for hive, flag in hives:
+            combo = (hive, flag)
+            if combo in seen_keys:
+                continue
+            seen_keys.add(combo)
             try:
                 key = winreg.OpenKey(hive, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall", 0, flag)
-                i = 0
-                while True:
-                    try:
-                        sub = winreg.OpenKey(key, winreg.EnumKey(key, i))
-                        i += 1
-                        name, _t = winreg.QueryValueEx(sub, "DisplayName")
-                        if name and len(name) > 2 and not name.startswith("{"):
-                            names.add(name)
-                    except OSError:
-                        break
-                    except Exception:
-                        i += 1
             except OSError:
                 continue
+            i = 0
+            while True:
+                try:
+                    sub = winreg.OpenKey(key, winreg.EnumKey(key, i))
+                    i += 1
+                    name, _t = winreg.QueryValueEx(sub, "DisplayName")
+                    if name and len(name) > 2 and not name.startswith("{"):
+                        names.add(name)
+                except OSError:
+                    break
+                except Exception:
+                    i += 1
+    except Exception:
+        pass
+    try:
+        from .pc import _uwp_index
+
+        for uwp_name in _uwp_index():
+            names.add(uwp_name.title())
     except Exception:
         pass
     return sorted(names)[:limit]

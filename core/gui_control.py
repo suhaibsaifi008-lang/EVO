@@ -109,8 +109,12 @@ def type_text(text: str) -> str:
     if all(ord(ch) < 128 for ch in text):
         pg.typewrite(text, interval=0.012)
         return f"Typed {len(text)} characters."
+    import base64
+
+    b64 = base64.b64encode(text.encode("utf-8")).decode("ascii")
+    ps = f"Set-Clipboard -Value ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{b64}')))"
     subprocess.run(
-        ["powershell", "-NoProfile", "-NonInteractive", "-Command", f"Set-Clipboard -Value @'\n{text}\n'@"],
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
         capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW,
         timeout=10,
     )
@@ -173,7 +177,10 @@ def click_element(description: str) -> str:
     match = re.search(r"\{[^{}]*\"x\"[^{}]*\}", raw, re.DOTALL)
     if not match:
         return f"I could not locate '{description}' on screen. Vision said: {raw[:150]}"
-    data = json.loads(match.group(0))
+    try:
+        data = json.loads(match.group(0))
+    except (ValueError, TypeError):
+        return f"Vision returned unreadable coordinates for '{description}': {raw[:150]}"
     nx = float(data.get("x", -1))
     ny = float(data.get("y", -1))
     if not (0 <= nx <= 1000 and 0 <= ny <= 1000):

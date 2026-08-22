@@ -9,9 +9,9 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from .config import DATA_DIR
+from .config import DATA_DIR, HOST, PORT
 
-SERVER_URL = os.environ.get("JARVIS_SERVER_URL", "http://127.0.0.1:8420").rstrip("/")
+SERVER_URL = os.environ.get("JARVIS_SERVER_URL", f"http://{HOST}:{PORT}").rstrip("/")
 MIC_DEVICE = os.environ.get("JARVIS_MIC_INDEX", "")
 WAKE_THRESHOLD = float(os.environ.get("JARVIS_WAKE_THRESHOLD", "0.5"))
 COOLDOWN_SECONDS = 3.5
@@ -97,8 +97,13 @@ def _speak_reply(text: str) -> None:
 
 
 def _ensure_vosk() -> Path | None:
-    if VOSK_DIR.exists() and any(VOSK_DIR.glob("*.conf")) or VOSK_DIR.exists() and list(VOSK_DIR.iterdir()):
-        return VOSK_DIR
+    if VOSK_DIR.exists():
+        try:
+            if any(VOSK_DIR.iterdir()):
+                return VOSK_DIR
+            VOSK_DIR.rmdir()  # empty leftover from a failed extraction
+        except OSError:
+            pass
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     zipped = MODELS_DIR / "vosk.zip"
     print("[ear] downloading local speech model (~40MB, one time)...", flush=True)
@@ -109,11 +114,20 @@ def _ensure_vosk() -> Path | None:
             zf.extractall(MODELS_DIR)
         extracted = MODELS_DIR / inner
         if extracted.exists():
-            extracted.rename(VOSK_DIR)
+            if VOSK_DIR.exists():
+                for child in extracted.iterdir():
+                    child.replace(VOSK_DIR / child.name)
+                extracted.rmdir()
+            else:
+                extracted.rename(VOSK_DIR)
         zipped.unlink()
-        return VOSK_DIR if VOSK_DIR.exists() else None
+        return VOSK_DIR if VOSK_DIR.exists() and any(VOSK_DIR.iterdir()) else None
     except Exception as exc:
         print(f"[ear] vosk model download failed: {exc}", flush=True)
+        try:
+            zipped.unlink(missing_ok=True)
+        except Exception:
+            pass
         return None
 
 
@@ -213,7 +227,7 @@ class Ear:
 
         have_vosk = self.load()
         mode = "full-duplex voice" if have_vosk else "wake-only (no local STT)"
-        print(f"[ear] online â€” {mode}. Say 'Hey Jarvis'.", flush=True)
+        print(f"[ear] online - {mode}. Say 'Hey Jarvis'.", flush=True)
 
         device = int(MIC_DEVICE) if MIC_DEVICE.isdigit() else None
         kwargs = {}
@@ -259,9 +273,26 @@ class Ear:
                         break
 
 
+def run_once() -> None:
+    """Run one blocking ear session. Kept separate so main() can retry it."""
+    Ear().run()
+
+
 def run_once_compat() -> None:
     """Legacy entry point kept for compatibility."""
-    Ear().run()
+    run_once()
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        k32 = ctypes.windll.kernel32
+        h = k32.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        k32.CloseHandle(h)
+        return True
+    except Exception:
+        return True
 
 
 def main() -> None:
@@ -275,8 +306,9 @@ def main() -> None:
             import json as _json
 
             info = _json.loads(lock.read_text() or "{}")
-            if time.time() - float(info.get("ts", 0)) < 86400:
-                print("[ear] another ear instance is already running — exiting.", flush=True)
+            stale = time.time() - float(info.get("ts", 0)) >= 86400
+            if not stale and _pid_alive(int(info.get("pid", 0))):
+                print("[ear] another ear instance is already running - exiting.", flush=True)
                 return
         except Exception:
             pass

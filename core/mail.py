@@ -119,11 +119,13 @@ def read_inbox(limit: int = 6, unread_only: bool = False) -> str:
                     if part.get_content_type() == "text/plain":
                         payload = part.get_payload(decode=True)
                         if payload:
-                            body_snip = payload.decode(errors="ignore").strip()
+                            charset = part.get_content_charset() or "utf-8"
+                            body_snip = payload.decode(charset, errors="ignore").strip()
                         break
             else:
                 payload = msg.get_payload(decode=True)
-                body_snip = (payload or b"").decode(errors="ignore").strip()
+                charset = msg.get_content_charset() or "utf-8"
+                body_snip = (payload or b"").decode(charset, errors="ignore").strip()
             lines.append(f"From: {frm}\nSubject: {subj}\nDate: {date}\n{body_snip[:220]}")
         return "\n---\n".join(lines)
     finally:
