@@ -1,4 +1,4 @@
-import json
+﻿import json
 import re
 import subprocess
 import time
@@ -111,7 +111,7 @@ def type_text(text: str) -> str:
         return f"Typed {len(text)} characters."
     subprocess.run(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", f"Set-Clipboard -Value @'\n{text}\n'@"],
-        capture_output=True,
+        capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW,
         timeout=10,
     )
     time.sleep(0.15)

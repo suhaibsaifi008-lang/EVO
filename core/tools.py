@@ -1,5 +1,6 @@
 import json
 import threading
+import urllib.request
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable
@@ -75,10 +76,158 @@ def _audit(tool: str, args: dict, outcome: str, detail: str) -> None:
 # ---------- PC control ----------
 
 
-@tool("open_app", "Open a desktop application by name (e.g. chrome, notepad, spotify).", {"target": {"type": "string", "desc": "app name or website URL"}})
+@tool("open_app", "Open a desktop application by name and VERIFY its window appeared.", {"target": {"type": "string", "desc": "app name or website URL"}})
 def _open_app(target: str) -> str:
+    import re
+
+    from .verification import verify_app_window
+
     opened = pc.open_target(target)
-    return f"Opened {opened}."
+    if re.match(r"^(https?://|www\.)\S+$", target.strip(), re.IGNORECASE):
+        return f"Opened {opened} in the default browser."
+    check = verify_app_window(target.split()[0][:18], timeout_s=8)
+    if check.get("verified"):
+        return f"Opened {opened} — verified window '{check['window'][:60]}' is visible."
+    return f"Launched {opened}, but I could not confirm a matching window yet ({check.get('reason', '')})."
+
+
+# ---------- R2 browser automation ----------
+
+
+@tool("browse_navigate", "Open EVO's own automated Chromium session at a URL and return page title/preview.", {"url": {"type": "string", "required": True}})
+def _browse_navigate(url: str) -> str:
+    from . import browser_control as bc
+
+    r = bc.navigate(url)
+    return f"Loaded '{r['title']}' — {r['url']}\n{r['preview'][:300]}"
+
+
+@tool("browse_click", "Click an element in EVO's browser by describing it ('the search button', 'Sign in link'). Self-retries.", {"description": {"type": "string", "required": True}})
+def _browse_click(description: str) -> str:
+    from . import browser_control as bc
+
+    r = bc.click(description)
+    return f"Clicked '{r['clicked']}'. Now on {r['url']}"
+
+
+@tool("browse_fill", "Type text into a field of EVO's browser by describing it; optionally press Enter.", {"description": {"type": "string", "required": True}, "text": {"type": "string", "required": True}, "submit": {"type": "boolean", "default": False}})
+def _browse_fill(description: str, text: str, submit: bool = False) -> str:
+    from . import browser_control as bc
+
+    r = bc.fill(description, text, submit=submit)
+    state = "verified" if r["verified_value"] else "filled (value unverified)"
+    return f"Typed into '{r['filled']}' — {state}{' and submitted' if r['submitted'] else ''}."
+
+
+@tool("browse_read", "Read the current page text of EVO's browser.", {"max_chars": {"type": "integer", "default": 2400}})
+def _browse_read(max_chars: int = 2400) -> str:
+    from . import browser_control as bc
+
+    r = bc.read(min(max_chars, 6000))
+    return f"'{r['title']}' — {r['url']}\n\n{r['text']}"
+
+
+@tool("browse_search_web", "Search inside EVO's browser session and read the result titles.", {"query": {"type": "string", "required": True}})
+def _browse_search(query: str) -> str:
+    from . import browser_control as bc
+
+    return bc.search_web(query)
+
+
+@tool("browse_verify", "Grounded verification of EVO's browser state: url_contains / title_contains / text_on_page / element_visible.", {"kind": {"type": "string", "required": True}, "value": {"type": "string", "required": True}})
+def _browse_verify(kind: str, value: str) -> str:
+    from . import browser_control as bc
+
+    return "VERIFIED ✓" if bc.verify(kind.strip(), value.strip()) else f"NOT verified: {kind}='{value}' failed."
+
+
+@tool("browse_close", "Close EVO's automated browser session.")
+def _browse_close() -> str:
+    from . import browser_control as bc
+
+    return bc.close()
+
+
+# ---------- R1 app & window lifecycle ----------
+
+
+from . import appctl as pc_apps
+
+
+@tool("list_installed_apps", "Enumerate applications installed on this PC.")
+def _installed_apps(limit: int = 40) -> str:
+    rows = pc_apps.list_installed_apps(max(5, min(int(limit), 80)))
+    return ", ".join(rows)
+
+
+@tool("running_apps", "List currently open app windows.")
+def _running_apps() -> str:
+    rows = pc_apps.running_apps()
+    return "; ".join(rows) if rows else "No app windows open."
+
+
+@tool("close_app", "Close an application by part of its window title. Graceful first; force=True terminates.", {"target": {"type": "string", "required": True}, "force": {"type": "boolean", "default": False}})
+def _close_app(target: str, force: bool = False) -> str:
+    return pc_apps.close_window(target, force=bool(force))
+
+
+@tool("minimize_window", "Minimize windows whose title contains target.", {"target": {"type": "string", "required": True}})
+def _minimize(target: str) -> str:
+    return pc_apps.minimize(target)
+
+
+@tool("maximize_window", "Maximize windows whose title contains target.", {"target": {"type": "string", "required": True}})
+def _maximize(target: str) -> str:
+    return pc_apps.maximize(target)
+
+
+@tool("restore_window", "Restore minimized/maximized windows whose title contains target.", {"target": {"type": "string", "required": True}})
+def _restore(target: str) -> str:
+    return pc_apps.restore(target)
+
+
+@tool("move_window", "Move/resize a window (restores it first).", {"target": {"type": "string", "required": True}, "x": {"type": "integer", "required": True}, "y": {"type": "integer", "required": True}, "w": {"type": "integer"}, "h": {"type": "integer"}})
+def _move_window(target: str, x: int, y: int, w: int = 0, h: int = 0) -> str:
+    return pc_apps.move_window(target, x, y, w or 0, h or 0)
+
+
+# ---------- office & data ----------
+
+
+@tool("read_office", "Read text content of DOCX/XLSX/PPTX/PDF/TXT files on this machine.", {"path": {"type": "string", "required": True}, "max_chars": {"type": "integer", "default": 3500}})
+def _read_office(path: str, max_chars: int = 3500) -> str:
+    from . import docs
+
+    try:
+        return docs.read_office(path, max_chars=max(400, min(int(max_chars), 8000)))
+    except docs.DocError as exc:
+        return f"ERROR: {exc}"
+
+
+@tool("analyze_excel", "Profile an Excel workbook: sheets, dimensions, headers, numeric stats and possible anomalies per sheet.", {"path": {"type": "string", "required": True}})
+def _analyze_excel(path: str) -> str:
+    import json as _json
+
+    from . import docs
+
+    try:
+        profile = docs.excel_profile(path)
+    except docs.DocError as exc:
+        return f"ERROR: {exc}"
+    except Exception as exc:
+        return f"Could not analyse workbook: {exc}"
+    return _json.dumps(profile, ensure_ascii=False)[:3000]
+
+
+@tool("make_document", "Create a formatted Word document (# headings, - bullets supported) and open its folder.", {"title": {"type": "string", "required": True}, "content": {"type": "string", "required": True}, "filename": {"type": "string"}})
+def _make_doc(title: str, content: str, filename: str = "") -> str:
+    from . import docs
+
+    try:
+        path = docs.make_document(title, content, filename)
+    except docs.DocError as exc:
+        return f"ERROR: {exc}"
+    return f"Document saved: {path}"
 
 
 @tool("web_search", "Search the live internet; returns titles, URLs and snippets.", {"query": {"type": "string", "required": True}, "max_results": {"type": "integer", "default": 5}})
@@ -661,6 +810,93 @@ def _pdf(title: str, content: str, filename: str = "") -> str:
     from . import reports
 
     return reports.make_pdf(title, content, filename)
+
+
+# ---------- deep diagnostics ----------
+
+
+@tool("system_diagnostics", "Run a full self-check of every EVO subsystem and report OK/DOWN per component.", {})
+def _deep_diag() -> str:
+    lines: list[str] = []
+
+    def check(name, fn):
+        try:
+            result = fn()
+            lines.append(f"{name}: {result}")
+        except Exception as exc:
+            lines.append(f"{name}: DOWN ({str(exc)[:80]})")
+
+    from . import config
+
+    def llm_check():
+        if not config.llm_enabled():
+            return "no primary key"
+        from .llm import chat
+
+        reply = chat([{"role": "user", "content": "say ok"}], temperature=0)
+        return f"online ({reply[:12]})"
+
+    check("Language core", llm_check)
+
+    def ollama_check():
+        if not config.ollama_ready():
+            return "not configured"
+        req = urllib.request.Request(config.OLLAMA_URL.rstrip("/") + "/models")
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            resp.read()
+        return "reachable"
+
+    check("Ollama fallback", ollama_check)
+
+    def mic_check():
+        import sounddevice as sd
+
+        n = len([d for d in sd.query_devices() if d["max_input_channels"] > 0])
+        return f"{n} input device(s)" if n else "NO MICROPHONE FOUND"
+
+    check("Microphone", mic_check)
+
+    def pw_check():
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as p:
+            b = p.chromium.launch(headless=True)
+            b.close()
+        return "chromium launches"
+
+    check("Browser engine", pw_check)
+
+    check("Database", lambda: db.raw_query_one("PRAGMA quick_check") or "ok")
+    check("Disk C", lambda: f"{pc.disk_free_percent('C')}% used")
+
+    try:
+        s = pc.system_status()
+        lines.append(f"System: CPU {s.get('cpu_percent')}%, RAM {s.get('ram_used_gb')}/{s.get('ram_total_gb')}GB")
+    except Exception as exc:
+        lines.append(f"System: DOWN ({exc})")
+
+    try:
+        active_w = len([w for w in db.list_watchers() if w["status"] == "active"])
+        lines.append(f"Watchers: {active_w} armed")
+    except Exception:
+        lines.append("Watchers: ?")
+    try:
+        running_m = len([p for p in db.list_projects() if p["status"] == "running"])
+        lines.append(f"Missions: {running_m} running")
+    except Exception:
+        lines.append("Missions: ?")
+    try:
+        ear_lock = config.DATA_DIR / "ear.lock"
+        import time as _t
+
+        if ear_lock.exists():
+            age = _t.time() - ear_lock.stat().st_mtime
+            lines.append(f"Ear lock: present ({age / 3600:.1f}h old)")
+        else:
+            lines.append("Ear lock: not running locally")
+    except Exception:
+        pass
+    return "\n".join(lines)
 
 
 # ---------- feedback memory ----------

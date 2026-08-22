@@ -1,4 +1,4 @@
-import os
+﻿import os
 import subprocess
 import sys
 import threading
@@ -89,6 +89,7 @@ def run_python(code: str = "", filename: str | None = None, timeout: int = 25) -
             cwd=str(WORKSPACE),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW,
             text=True,
             encoding="utf-8",
             errors="replace",

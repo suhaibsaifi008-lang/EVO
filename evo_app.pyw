@@ -41,16 +41,44 @@ def main() -> None:
     if not _wait_port(PORT):
         print("EVO server failed to start.", file=sys.stderr)
 
-    webview.create_window(
-        f"{ASSISTANT_NAME} — Console",
-        f"http://127.0.0.1:{PORT}",
-        width=1340,
-        height=880,
-        min_size=(980, 640),
-        background_color="#070b14",
-    )
-    webview.start()
+    url = f"http://127.0.0.1:{PORT}"
+    try:
+        window = webview.create_window(
+            f"{ASSISTANT_NAME} — Console",
+            url,
+            width=1340,
+            height=880,
+            min_size=(980, 640),
+            background_color="#070b14",
+        )
+        webview.start()
+    except Exception as exc:
+        print(f"Native window unavailable ({exc}) — opening browser app window instead.", file=sys.stderr)
+        _open_as_app(url)
+        while True:
+            time.sleep(5)
     os._exit(0)
+
+
+_BROWSER_CANDIDATES = (
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+)
+
+
+def _open_as_app(url: str) -> None:
+    import subprocess
+
+    for browser in _BROWSER_CANDIDATES:
+        if os.path.exists(browser):
+            subprocess.Popen([browser, f"--app={url}", "--window-size=1340,880"])
+            return
+    import webbrowser
+
+    webbrowser.open(url)
 
 
 if __name__ == "__main__":

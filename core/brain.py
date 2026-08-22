@@ -112,6 +112,19 @@ class Brain:
             return {"reply": "I did not catch that.", "refresh": []}
         lowered = text.lower().strip(" .!?")
 
+        if re.fullmatch(r"(?:evo|jarvis)?[,\s]*(stop|stand down|halt)(?:\s+(?:everything|all|now))?[.!]?", lowered):
+            from . import control
+
+            result = control.halt(config.USER_ADDRESS)
+            return {"reply": result["text"], "halt": True, "refresh": ["projects"]}
+        try:
+            from . import control as _ctl
+
+            if _ctl.is_halted():
+                _ctl.resume_next_command()
+        except Exception:
+            pass
+
         confirm = self._handle_confirmation(lowered)
         if confirm:
             return confirm

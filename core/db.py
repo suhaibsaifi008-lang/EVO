@@ -1,4 +1,4 @@
-import json
+﻿import json
 import sqlite3
 import threading
 import time
@@ -104,6 +104,13 @@ def init_db() -> None:
                 last_at REAL NOT NULL,
                 proposed INTEGER NOT NULL DEFAULT 0
             );
+            CREATE TABLE IF NOT EXISTS strategies (
+                fail_tool TEXT NOT NULL,
+                win_tool TEXT NOT NULL,
+                score INTEGER NOT NULL DEFAULT 1,
+                last_at REAL NOT NULL,
+                PRIMARY KEY(fail_tool, win_tool)
+            );
             """
         )
         _ensure_column(conn, "projects", "state", "TEXT NOT NULL DEFAULT ''")
@@ -130,6 +137,12 @@ def recent_audit(limit: int = 100) -> list[dict]:
             "SELECT tool, args, outcome, detail, ts FROM audit ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def raw_query_one(sql: str):
+    with _lock, _connect() as conn:
+        row = conn.execute(sql).fetchone()
+    return tuple(row) if row else None
 
 
 # ---------- watchers ----------
@@ -271,6 +284,36 @@ def top_habits(n: int = 5) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# ---------- strategy learning ----------
+
+
+def bump_strategy(fail_tool: str, win_tool: str) -> None:
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO strategies(fail_tool, win_tool, score, last_at) VALUES(?,?,1,?) "
+            "ON CONFLICT(fail_tool, win_tool) DO UPDATE SET score=score+1, last_at=excluded.last_at",
+            (fail_tool[:60], win_tool[:60], time.time()),
+        )
+
+
+def relevant_strategies(query: str = "", limit: int = 5) -> list[dict]:
+    with _lock, _connect() as conn:
+        rows = conn.execute(
+            "SELECT fail_tool, win_tool, score FROM strategies ORDER BY score DESC, last_at DESC LIMIT ?",
+            (max(limit, 8),),
+        ).fetchall()
+    out = [dict(r) for r in rows]
+    if query:
+        q = query.lower()
+        scored = [
+            r
+            for r in out
+            if any(w in (r["fail_tool"] + r["win_tool"]).lower() for w in q.split() if len(w) > 3)
+        ] or out
+        return scored[:limit]
+    return out
+
+
 def track_repeat(text: str) -> dict | None:
     """Returns the row when a phrase crosses the proposal threshold (once)."""
     import hashlib
@@ -305,10 +348,14 @@ def track_repeat(text: str) -> dict | None:
 
 def log_message(role: str, content: str) -> None:
     with _lock, _connect() as conn:
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO messages(role, content, ts) VALUES(?,?,?)",
             (role, content[:4000], time.time()),
         )
+        if cur.lastrowid % 100 == 0:
+            conn.execute(
+                "DELETE FROM messages WHERE id <= (SELECT MAX(id) - 3000 FROM messages)"
+            )
 
 
 def recent_messages(limit: int = 24) -> list[dict]:

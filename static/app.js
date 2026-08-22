@@ -2,6 +2,7 @@
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const log = document.getElementById("log");
 let selectedVoice = null;
 let wakeMode = false;
 let recognition = null;
@@ -348,6 +349,12 @@ async function pollEvents() {
       const res = await fetch("/api/events");
       const data = await res.json();
       for (const ev of data.events || []) {
+        if (ev.type === "halt") {
+          speechSynthesis.cancel();
+          if (currentAudio) currentAudio.pause();
+          toast(ev.text);
+          continue;
+        }
         if (ev.type === "voice_exchange") {
           if (ev.user_text) addMsg(ev.user_text, "you");
           addMsg(ev.text, "jarvis");
@@ -432,18 +439,35 @@ function setupSpeech() {
       else interim += r[0].transcript;
     }
     $("sttPreview").textContent = interim || final;
-    if (final && !wakeMode) handleHeard(final.trim());
+    if (final && !wakeMode) handleHeard(final.trim(), false);
+    else if (final && wakeMode && !manualListen) handleHeard(final.trim(), true);
+    else if (final && manualListen) handleHeard(final.trim(), false);
   };
   recognition.onend = () => {
     micBtn.classList.remove("on");
-    if (wakeMode) setTimeout(() => safeStart(), 250);
+    document.body.classList.remove("listening");
+    if (wakeMode && !manualListen) setTimeout(() => safeStart(), 250);
+    manualListen = false;
+  };
+  recognition.onerror = (e) => {
+    const reasons = {
+      "not-allowed": "Microphone BLOCKED — click the 🔒/mic icon in the address bar and allow it.",
+      "service-not-allowed": "Mic blocked by browser settings — allow microphone for this app.",
+      "no-speech": "Didn't hear anything — try again.",
+      "audio-capture": "No microphone found.",
+      network: "Speech service needs internet.",
+    };
+    toast(reasons[e.error] || `Mic error: ${e.error}`);
+    $("sttPreview").textContent = "";
   };
 
+  let manualListen = false;
+
   function safeStart() { try { recognition.start(); } catch {} }
-  function handleHeard(text) {
+  function handleHeard(text, viaWake) {
     $("sttPreview").textContent = "";
     if (!text) return;
-    if (wakeMode) {
+    if (viaWake) {
       const m = text.toLowerCase().replace(/[.,!?]/g, "").match(/^(?:jarvis|evo|evvo)[, ]*(.*)$/);
       if (!m) return;
       text = m[1].trim();
@@ -455,9 +479,10 @@ function setupSpeech() {
   window._safeStart = safeStart;
 
   micBtn.addEventListener("click", () => {
-    if (micBtn.classList.contains("on")) { recognition.stop(); return; }
-    micBtn.classList.add("on");
-    safeStart();
+    if (micBtn.classList.contains("on")) { manualListen = false; recognition.stop(); return; }
+    manualListen = true;
+    try { recognition.stop(); } catch {}
+    setTimeout(() => { micBtn.classList.add("on"); safeStart(); }, 120);
   });
 
   document.addEventListener("keydown", (e) => {

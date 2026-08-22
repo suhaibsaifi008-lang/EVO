@@ -1,4 +1,4 @@
-import json
+﻿import json
 import re
 import time
 from datetime import datetime
@@ -11,7 +11,7 @@ MAX_STEPS = 6
 
 SYSTEM_TEMPLATE = (
     "You are {name}, an autonomous AI butler running locally on the user's Windows PC. "
-    "Address the user as '{address}'. Style: precise, dry wit, never verbose — spoken replies under 80 words.\n"
+    "Address the user as '{address}'. Style: precise, dry wit, never verbose â€” spoken replies under 80 words.\n"
     "You control this PC through TOOLS. To use one, reply with ONLY a JSON object:\n"
     '{{"tool": "tool_name", "args": {{...}}}}\n'
     "You will receive its result, then continue. When you have everything you need (or for plain conversation), "
@@ -19,7 +19,7 @@ SYSTEM_TEMPLATE = (
     "Rules:\n"
     "- One tool call per reply. Never invent tools. Never output anything except the single JSON object.\n"
     "- Prefer tools over guessing facts. Combine multiple facts into ONE final say.\n"
-    "- Tools named skill_* are permanent abilities the user taught you — prefer them when relevant.\n"
+    "- Tools named skill_* are permanent abilities the user taught you â€” prefer them when relevant.\n"
     "- For genuinely hard analysis, strategy or math questions, use deep_thought instead of answering shallowly.\n"
     "- If a tool returns DENIED or TOOL_ERROR, explain gracefully instead of retrying twice.\n"
     "- Destructive power actions (shutdown/restart) are NOT available; if asked, say they need explicit setup.\n"
@@ -58,6 +58,23 @@ def build_system(user_text: str = "") -> str:
         "\n- Standing instructions from the user (OBEY these): "
         + " | ".join(c["instruction"] for c in corrections)
     ) if corrections else ""
+    world_line = ""
+    try:
+        from . import world_state
+
+        world_line = "\n- World state: " + world_state.context_line()
+    except Exception:
+        world_line = ""
+    strategies_line = ""
+    try:
+        strat = db.relevant_strategies(user_text or "", limit=3)
+        if strat:
+            strategies_line = (
+                "\n- Learned strategies (prefer these when the listed tool fails): "
+                + "; ".join(f"if {s['fail_tool']} fails, use {s['win_tool']}" for s in strat)
+            )
+    except Exception:
+        strategies_line = ""
     try:
         from .habits import summary_line
 
@@ -97,6 +114,8 @@ def build_system(user_text: str = "") -> str:
         + corrections_line
         + habits_line
         + screen_summary
+        + world_line
+        + strategies_line
     )
 
 
@@ -126,6 +145,7 @@ def run(
     tool_manifest = json.dumps(tools.manifest())
     deep_mode = db.get_setting("deep_mode", "0") == "1"
     model_override = (config.FAST_MODEL or "") if is_simple_query(user_text) else ""
+    last_error_tool = None
 
     for _ in range(max_steps):
         prompt_messages = [
@@ -167,6 +187,15 @@ def run(
         name = str(data.get("tool", "")).strip()
         args = data.get("args") if isinstance(data.get("args"), dict) else {}
         observation = tools.call(name, args)
+        failed_now = observation.startswith(("TOOL_ERROR", "ERROR:", "DENIED"))
+        if failed_now:
+            last_error_tool = name
+        elif last_error_tool and name != last_error_tool:
+            try:
+                db.bump_strategy(last_error_tool, name)
+            except Exception:
+                pass
+            last_error_tool = None
         if on_step:
             try:
                 on_step(f"[{name}] {observation[:140]}")
@@ -175,4 +204,4 @@ def run(
         messages.append({"role": "assistant", "content": raw})
         messages.append({"role": "user", "content": f"TOOL RESULT ({name}):\n{observation[:2500]}"})
 
-    return "That task needed more steps than I am allowed in one go — I have stopped to avoid surprises."
+    return "That task needed more steps than I am allowed in one go â€” I have stopped to avoid surprises."

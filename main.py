@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -8,7 +8,6 @@ import sys
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from core import config, db, pc
@@ -68,9 +67,21 @@ async def lifespan(app: FastAPI):
         pass
     dispatcher.start()
     try:
+        from core import world_state
+
+        world_state.start_updater(5.0)
+    except Exception:
+        pass
+    try:
         from core import watchers
 
         watchers.engine.start()
+    except Exception:
+        pass
+    try:
+        from core.projects import resume_all_at_boot
+
+        resume_all_at_boot()
     except Exception:
         pass
     try:
@@ -163,7 +174,28 @@ def status() -> dict:
 def health() -> dict:
     from core import config
 
-    out = {"llm_configured": config.llm_enabled(), "llm_online": False}
+    out = {
+        "llm_configured": config.llm_enabled(),
+        "llm_online": False,
+        "ollama_ready": config.ollama_ready(),
+        "db": "ok",
+        "watchers_active": 0,
+        "missions_running": 0,
+        "telegram": bool(__import__("core.telegram_link", fromlist=["x"]).telegram_ready()),
+        "version": "3.1",
+    }
+    try:
+        db.get_setting("ping")
+    except Exception as exc:
+        out["db"] = f"error: {exc}"
+    try:
+        out["watchers_active"] = len([w for w in db.list_watchers() if w["status"] == "active"])
+    except Exception:
+        pass
+    try:
+        out["missions_running"] = len([p for p in db.list_projects() if p["status"] == "running"])
+    except Exception:
+        pass
     if config.llm_enabled():
         try:
             from core import llm
@@ -409,9 +441,3 @@ def _drain_wait(q: Deque[dict], wait_seconds: float = 3.0) -> None:
     deadline = time.time() + wait_seconds
     while not q and time.time() < deadline:
         time.sleep(0.2)
-
-
-if STATIC_DIR.exists():
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static_assets")
-    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
-

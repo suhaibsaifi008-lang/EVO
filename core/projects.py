@@ -107,6 +107,20 @@ class ProjectManager:
             while steps_used < budget:
                 if db.project_status(pid) != "running":
                     return
+                try:
+                    from .control import is_halted
+
+                    if is_halted():
+                        db.save_project_state(pid, json.dumps(transcript[-16:], ensure_ascii=False))
+                        db.finish_project(
+                            pid, "paused",
+                            f"Paused by global STOP with progress saved at step {steps_used}.",
+                            keep_state=True,
+                        )
+                        _log(pid, "Halted by global STOP.")
+                        return
+                except Exception:
+                    pass
                 raw = chat(
                     [{"role": "system", "content": system}] + transcript[-12:]
                     + [{"role": "user", "content": "Proceed with the next step, or finish."}],
@@ -156,3 +170,23 @@ class ProjectManager:
 
 
 manager = ProjectManager()
+
+
+def resume_all_at_boot() -> int:
+    """Auto-resume missions that were running when the server died."""
+    resumed = 0
+    try:
+        for row in db.list_projects(50):
+            if row["status"] == "running":
+                if manager.resume(row["id"]):
+                    _log(row["id"], "Server restarted — mission auto-resumed.")
+                    dispatcher.publish({
+                        "type": "project_done",
+                        "kind": "project_done",
+                        "id": row["id"],
+                        "text": f"Mission #{row['id']} was interrupted by a restart and has been auto-resumed.",
+                    })
+                    resumed += 1
+    except Exception:
+        pass
+    return resumed

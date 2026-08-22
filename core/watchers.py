@@ -7,18 +7,9 @@ from .scheduler import dispatcher
 
 
 def disk_usage_percent(drive: str = "C") -> float:
-    import subprocess
+    from . import pc
 
-    drive = "".join(ch for ch in (drive or "C") if ch.isalnum())[:2] or "C"
-    result = subprocess.run(
-        ["powershell", "-NoProfile", "-NonInteractive", "-Command",
-         f"$d=Get-PSDrive {drive}; [math]::Round(100*$d.Used/($d.Used+$d.Free),1)"],
-        capture_output=True, text=True, timeout=20,
-    )
-    try:
-        return float(result.stdout.strip())
-    except ValueError:
-        raise RuntimeError(f"could not read drive {drive}")
+    return pc.disk_free_percent(drive)
 
 
 def _marker(text: str) -> str:

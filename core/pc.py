@@ -1,12 +1,16 @@
+﻿import ctypes
 import os
 import re
 import shutil
 import subprocess
+import time
 import webbrowser
 from datetime import datetime
 from urllib.parse import quote_plus
 
 from .config import SHOTS_DIR
+
+CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 APP_ALIASES = {
     "notepad": "notepad.exe",
@@ -44,6 +48,7 @@ def _run_ps(script: str, timeout: int = 15) -> str:
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
         capture_output=True,
         text=True,
+        creationflags=CREATE_NO_WINDOW,
         timeout=timeout,
     )
     if result.returncode != 0:
@@ -151,42 +156,129 @@ def volume(action: str) -> None:
 
 
 def lock_pc() -> None:
-    subprocess.run(["rundll32.exe", "user32.dll,LockWorkStation"], check=False)
+    subprocess.run(["rundll32.exe", "user32.dll,LockWorkStation"], check=False, creationflags=CREATE_NO_WINDOW)
 
 
 def system_status() -> dict[str, object]:
-    ps = (
-        "$cpu=(Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average;"
-        "$os=Get-CimInstance Win32_OperatingSystem;"
-        "$total=[math]::Round($os.TotalVisibleMemorySize/1MB,1);"
-        "$free=[math]::Round($os.FreePhysicalMemory/1MB,1);"
-        "$bat=Get-CimInstance Win32_Battery;"
-        "$up=(Get-Date)-$os.LastBootUpTime;"
-        "$out=[ordered]@{cpu=$cpu;ramTotalGb=$total;ramFreeGb=$free;"
-        "batteryPct=$(if($bat){$bat.EstimatedChargeRemaining}else{$null});"
-        "charging=$(if($bat){$bat.BatteryStatus -ge 2}else{$null});"
-        "uptimeHours=[math]::Round($up.TotalHours,1)};"
-        "$out | ConvertTo-Json -Compress"
-    )
-    import json
+    """Pure Win32 API — zero subprocesses, zero window flashes."""
+    import ctypes
 
-    raw = _run_ps(ps)
-    data = json.loads(raw)
-    used = round(float(data["ramTotalGb"]) - float(data["ramFreeGb"]), 1)
+    cpu = _cpu_percent_native()
+
+    class MEMORYSTATUSEX(ctypes.Structure):
+        _fields_ = [
+            ("dwLength", ctypes.c_uint), ("dwMemoryLoad", ctypes.c_uint),
+            ("ullTotalPhys", ctypes.c_uint64), ("ullAvailPhys", ctypes.c_uint64),
+            ("ullTotalPageFile", ctypes.c_uint64), ("ullAvailPageFile", ctypes.c_uint64),
+            ("ullTotalVirtual", ctypes.c_uint64), ("ullAvailVirtual", ctypes.c_uint64),
+            ("ullAvailExtendedVirtual", ctypes.c_uint64),
+        ]
+
+    mem = MEMORYSTATUSEX()
+    mem.dwLength = ctypes.sizeof(mem)
+    ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(mem))
+    total_gb = round(mem.ullTotalPhys / (1024 ** 3), 1)
+    free_gb = round(mem.ullAvailPhys / (1024 ** 3), 1)
+    used_gb = round(total_gb - free_gb, 1)
+
+    bat_pct, charging = _battery_native()
+
+    uptime_hours = None
+    try:
+        uptime_hours = round(ctypes.windll.kernel32.GetTickCount64() / 3600000.0, 1)
+    except Exception:
+        pass
+
     return {
-        "cpu_percent": data.get("cpu"),
-        "ram_used_gb": used,
-        "ram_total_gb": data.get("ramTotalGb"),
-        "battery_percent": data.get("batteryPct"),
-        "charging": bool(data.get("charging")) if data.get("batteryPct") is not None else None,
-        "uptime_hours": data.get("uptimeHours"),
+        "cpu_percent": int(cpu) if cpu is not None else None,
+        "ram_used_gb": used_gb,
+        "ram_total_gb": total_gb,
+        "battery_percent": round(bat_pct) if bat_pct is not None else None,
+        "charging": charging,
+        "uptime_hours": uptime_hours,
     }
+
+
+class _SPPI(ctypes.Structure):
+    _fields_ = [("Idle", ctypes.c_int64), ("Kernel", ctypes.c_int64), ("User", ctypes.c_int64)]
+
+
+def _cpu_snapshot():
+    ntdll = ctypes.WinDLL("ntdll")
+    n = os.cpu_count() or 1
+    arr = (_SPPI * n)()
+    if ntdll.NtQuerySystemInformation(8, arr, ctypes.sizeof(arr), None) != 0:
+        raise OSError("NtQuerySystemInformation failed")
+    return (
+        sum(a.Idle for a in arr),
+        sum(a.Kernel for a in arr),
+        sum(a.User for a in arr),
+    )
+
+
+def _cpu_percent_native(sample_ms: int = 220):
+    try:
+        i1, k1, u1 = _cpu_snapshot()
+        time.sleep(sample_ms / 1000.0)
+        i2, k2, u2 = _cpu_snapshot()
+    except Exception:
+        return None
+    d_idle = max(0, i2 - i1)
+    d_kernel = max(0, k2 - k1)
+    d_user = max(0, u2 - u1)
+    total = d_kernel + d_user
+    if total <= 0:
+        return 0.0
+    busy = max(0, total - d_idle)
+    return round(busy / total * 100.0)
+
+
+def _battery_native():
+    try:
+        import ctypes
+
+        class BATTERY_STATE(ctypes.Structure):
+            _fields_ = [
+                ("AcOnLine", ctypes.c_ubyte), ("BatteryPresent", ctypes.c_ubyte),
+                ("Charging", ctypes.c_ubyte), ("Discharging", ctypes.c_ubyte),
+                ("Spare1", ctypes.c_ubyte * 3), ("Tag", ctypes.c_ubyte),
+                ("MaxCapacity", ctypes.c_ulong), ("RemainingCapacity", ctypes.c_ulong),
+                ("Rate", ctypes.c_long), ("EstimatedTime", ctypes.c_ulong),
+                ("DefaultAlert1", ctypes.c_ulong), ("DefaultAlert2", ctypes.c_ulong),
+            ]
+
+        bs = BATTERY_STATE()
+        result = ctypes.windll.powrprof.CallNtPowerInformation(
+            5, None, 0, ctypes.byref(bs), ctypes.sizeof(bs)
+        )
+        if result != 0 or not bs.BatteryPresent:
+            return None, None
+        if bs.MaxCapacity <= 0:
+            return None, None
+        pct = min(100.0, bs.RemainingCapacity / bs.MaxCapacity * 100.0)
+        return pct, bool(bs.AcOnLine)
+    except Exception:
+        return None, None
+
+
+def disk_free_percent(drive: str = "C") -> float:
+    import ctypes
+
+    drive = "".join(ch for ch in (drive or "C") if ch.isalnum())[:1] or "C"
+    free = ctypes.c_uint64()
+    total = ctypes.c_uint64()
+    ok = ctypes.windll.kernel32.GetDiskFreeSpaceExW(
+        f"{drive}:\\", ctypes.byref(free), ctypes.byref(total), None
+    )
+    if not ok or total.value == 0:
+        raise RuntimeError(f"could not read drive {drive}")
+    return round((total.value - free.value) / total.value * 100.0, 1)
 
 
 def power(action: str) -> None:
     if action == "shutdown":
-        subprocess.Popen(["shutdown", "/s", "/t", "5"])
+        subprocess.Popen(["shutdown", "/s", "/t", "5"], creationflags=CREATE_NO_WINDOW)
     elif action == "restart":
-        subprocess.Popen(["shutdown", "/r", "/t", "5"])
+        subprocess.Popen(["shutdown", "/r", "/t", "5"], creationflags=CREATE_NO_WINDOW)
     else:
         raise ValueError(f"Unsupported power action: {action}")

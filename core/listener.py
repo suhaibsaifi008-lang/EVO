@@ -1,4 +1,4 @@
-import ctypes
+﻿import ctypes
 import json
 import os
 import queue
@@ -73,7 +73,7 @@ def _sapi_speak(text: str) -> None:
         f"$s.Speak('{safe[:600]}')"
     )
     subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
-                   capture_output=True, timeout=60)
+                   capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=60)
 
 
 def _speak_reply(text: str) -> None:
@@ -213,7 +213,7 @@ class Ear:
 
         have_vosk = self.load()
         mode = "full-duplex voice" if have_vosk else "wake-only (no local STT)"
-        print(f"[ear] online — {mode}. Say 'Hey Jarvis'.", flush=True)
+        print(f"[ear] online â€” {mode}. Say 'Hey Jarvis'.", flush=True)
 
         device = int(MIC_DEVICE) if MIC_DEVICE.isdigit() else None
         kwargs = {}
@@ -269,16 +269,34 @@ def main() -> None:
 
     if os.environ.get("JARVIS_EAR_DISABLE") == "1":
         return
-    backoff = 3
-    while True:
+    lock = DATA_DIR / "ear.lock"
+    if lock.exists():
         try:
-            Ear().run()
-        except KeyboardInterrupt:
-            return
-        except Exception as exc:
-            print(f"[ear] {exc} — retrying in {backoff}s", flush=True)
-            time.sleep(backoff)
-            backoff = min(backoff * 2, 60)
+            import json as _json
+
+            info = _json.loads(lock.read_text() or "{}")
+            if time.time() - float(info.get("ts", 0)) < 86400:
+                print("[ear] another ear instance is already running — exiting.", flush=True)
+                return
+        except Exception:
+            pass
+    lock.write_text(json.dumps({"pid": os.getpid(), "ts": time.time()}))
+    backoff = 3
+    try:
+        while True:
+            try:
+                run_once()
+            except KeyboardInterrupt:
+                return
+            except Exception as exc:
+                print(f"[ear] {exc} — retrying in {backoff}s", flush=True)
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 60)
+    finally:
+        try:
+            lock.unlink()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

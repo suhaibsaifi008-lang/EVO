@@ -1,4 +1,4 @@
-import ast
+﻿import ast
 import json
 import re
 import subprocess
@@ -53,6 +53,7 @@ def test_skill(path: Path, example_args: dict | None) -> str:
         [sys.executable, "-I", str(path), payload],
         capture_output=True,
         text=True,
+        creationflags=subprocess.CREATE_NO_WINDOW,
         timeout=RUN_TIMEOUT,
         cwd=str(SKILLS_DIR),
     )
@@ -76,7 +77,7 @@ def save_skill(name: str, description: str, code: str, args_schema: dict | None,
         outcome = test_skill(py_path, example_args)
         report += f" {outcome}"
         if outcome.startswith("TEST FAILED"):
-            return report + " The skill is saved but may need fixes — inspect with read_file and update it."
+            return report + " The skill is saved but may need fixes â€” inspect with read_file and update it."
     register(clean)
     return report
 
