@@ -112,6 +112,24 @@ class TestOpenTarget:
 
 
 class TestOpenIntents:
+    def test_open_works_even_when_agent_fails(self, brain, temp_db, monkeypatch):
+        """Deterministic-first: PC commands must not depend on the LLM."""
+        from core import config as cfg
+
+        monkeypatch.setattr(cfg, "agent_enabled", lambda: True)
+
+        import core.agent_loop as agent_loop
+
+        def boom(*a, **k):
+            raise RuntimeError("llm down")
+
+        monkeypatch.setattr(agent_loop, "run", boom)
+        seen = []
+        monkeypatch.setattr(pc.os, "startfile", lambda p: seen.append(p))
+        result = brain.respond("open calculator")
+        assert any("calc" in str(p).lower() for p in seen)
+        assert "calculator" in result["reply"].lower()
+
     def test_open_new_tab_and_search(self, brain, monkeypatch):
         calls = []
         monkeypatch.setattr(pc, "open_in_browser", lambda q, b="": calls.append((q, b)) or q)

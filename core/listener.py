@@ -42,6 +42,7 @@ WAKE_FUZZY_THRESHOLD = 0.8
 # Conversation session (ChatGPT-voice style): one wake phrase starts a live
 # dialogue; every sentence is answered without repeating the wake word.
 SESSION_IDLE_EXIT = 45.0  # seconds of silence before the session closes
+BARGE_IN_RMS = 1100       # sustained mic level during playback that cuts EVO off
 EXIT_PHRASES = (
     "stop listening", "go to sleep", "go away", "that will be all",
     "that'll be all", "goodbye", "good bye", "thank you goodbye",
@@ -81,43 +82,108 @@ def _announce(event: dict) -> None:
     _post("/api/announce", event, timeout=5)
 
 
-def _mci_play(path: Path) -> None:
-    winmm = ctypes.windll.winmm
-    alias = f"evo{int(time.time()*1000)}"
-    winmm.mciSendStringW(f'open "{path}" type mpegvideo alias {alias}', None, 0, None)
-    winmm.mciSendStringW(f"play {alias} wait", None, 0, None)
-    winmm.mciSendStringW(f"close {alias}", None, 0, None)
+_mci_alias = {"name": None}
 
 
-def _sapi_speak(text: str) -> None:
+def _mci_start(path: Path) -> str | None:
+    """Start non-blocking playback; returns the alias or None."""
+    try:
+        winmm = ctypes.windll.winmm
+        alias = f"evo{int(time.time()*1000)}"
+        if winmm.mciSendStringW(f'open "{path}" type mpegvideo alias {alias}', None, 0, None) != 0:
+            return None
+        if winmm.mciSendStringW(f"play {alias}", None, 0, None) != 0:
+            winmm.mciSendStringW(f"close {alias}", None, 0, None)
+            return None
+        _mci_alias["name"] = alias
+        return alias
+    except Exception:
+        return None
+
+
+def _mci_playing(alias: str) -> bool:
+    buf = ctypes.create_unicode_buffer(64)
+    ctypes.windll.winmm.mciSendStringW(f"status {alias} mode", buf, 64, None)
+    return buf.value.strip().lower() == "playing"
+
+
+def _mci_close(alias: str) -> None:
+    try:
+        winmm = ctypes.windll.winmm
+        winmm.mciSendStringW(f"stop {alias}", None, 0, None)
+        winmm.mciSendStringW(f"close {alias}", None, 0, None)
+    except Exception:
+        pass
+    if _mci_alias.get("name") == alias:
+        _mci_alias["name"] = None
+
+
+_sapi_proc = {"proc": None}
+
+
+def _sapi_speak(text: str, stop_event: "threading.Event | None" = None) -> None:
     safe = text.replace("'", "''")
     ps = (
         "Add-Type -AssemblyName System.Speech;"
         "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer;"
         f"$s.Speak('{safe[:600]}')"
     )
-    subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
-                   capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=60)
+    proc = subprocess.Popen(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    _sapi_proc["proc"] = proc
+    while proc.poll() is None:
+        if stop_event is not None and stop_event.is_set():
+            proc.kill()
+            break
+        time.sleep(0.12)
 
 
-def _speak_reply(text: str) -> None:
+def _abort_playback() -> None:
+    """Immediately silence whatever EVO is saying (barge-in)."""
+    alias = _mci_alias.get("name")
+    if alias:
+        _mci_close(alias)
+    proc = _sapi_proc.get("proc")
+    if proc is not None and proc.poll() is None:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+def _speak_reply(text: str, stop_event: "threading.Event | None" = None,
+                 done_event: "threading.Event | None" = None) -> None:
+    """Speak text in this thread, interruptible via stop_event."""
     _speaking.set()
     try:
-        played = False
+        path = None
         try:
             sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
             from core.tts import synthesize
 
             path = synthesize(text[:800])
-            _mci_play(path)
-            played = True
         except Exception:
-            played = False
-        if not played:
-            _sapi_speak(text)
+            path = None
+        if path is not None:
+            alias = _mci_start(path)
+            if alias:
+                while _mci_playing(alias):
+                    if stop_event is not None and stop_event.is_set():
+                        break
+                    time.sleep(0.12)
+                _mci_close(alias)
+            else:
+                _sapi_speak(text, stop_event)
+        else:
+            _sapi_speak(text, stop_event)
     finally:
-        time.sleep(0.25)
+        time.sleep(0.2)
         _speaking.clear()
+        if done_event is not None:
+            done_event.set()
 
 
 def _ensure_vosk() -> Path | None:
@@ -249,6 +315,25 @@ class Ear:
         self.vosk_model = None
         self.last_hit = 0.0
         self.wake_count = 0
+        self._gen = 0                      # exchange generation (barge-in cancel)
+        self.stop_tts = threading.Event()  # set to silence playback instantly
+
+    def say(self, text: str, blocking: bool = False) -> None:
+        """Speak text. Non-blocking by default; always interruptible."""
+        self.stop_tts.clear()
+        if blocking:
+            _speak_reply(text, self.stop_tts)
+            return
+        threading.Thread(
+            target=_speak_reply, args=(text, self.stop_tts), daemon=True, name="evo-speak"
+        ).start()
+
+    def barge_in(self) -> None:
+        """User started talking: kill audio and invalidate pending replies."""
+        self._gen += 1
+        self.stop_tts.set()
+        _abort_playback()
+        _speaking.clear()
 
     def load(self) -> tuple[bool, bool]:
         have_vosk = False
@@ -340,12 +425,41 @@ class Ear:
             final_text = (final_text + " " + tail).strip()
         return final_text.strip()
 
+    def _fetch_reply(self, text: str) -> str | None:
+        for attempt in (0, 1):  # one retry so a blip never eats a question
+            result = _post("/api/chat", {"text": text}, timeout=90)
+            if result and str(result.get("reply", "")).strip():
+                return str(result["reply"]).strip()
+            time.sleep(0.6)
+        return None
+
+    def _start_exchange(self, text: str) -> None:
+        """Send text to the brain and speak the reply without blocking audio.
+
+        A newer utterance (higher generation) silently cancels this one -
+        that is what makes interruption feel instant.
+        """
+        self._gen += 1
+        gen = self._gen
+
+        def worker() -> None:
+            reply = self._fetch_reply(text)
+            if gen != self._gen:
+                return  # superseded by a newer utterance / barge-in
+            if reply is None:
+                _announce({"type": "voice_exchange", "kind": "voice",
+                           "spoken": False, "user_text": text,
+                           "text": "Core unreachable just now."})
+                reply = "My core seems unreachable right now."
+            else:
+                _announce({"type": "voice_exchange", "kind": "voice",
+                           "spoken": True, "user_text": text, "text": reply})
+            self.say(reply)
+
+        threading.Thread(target=worker, daemon=True, name="evo-exchange").start()
+
     def _handle_exchange(self, text: str) -> None:
-        result = _post("/api/chat", {"text": text}, timeout=120)
-        reply = (result or {}).get("reply") or "I could not reach my core just now."
-        _announce({"type": "voice_exchange", "kind": "voice", "spoken": True,
-                   "user_text": text, "text": reply})
-        _speak_reply(reply)
+        self._start_exchange(text)
 
     def _on_wake(self, command: str = "") -> None:
         """Common wake handling: chime, notify HUD, then run the command."""
@@ -367,14 +481,16 @@ class Ear:
                 print(f"[ear] heard: {command}", flush=True)
                 self._handle_exchange(command)
             else:
-                _speak_reply("I did not catch that.")
+                self.say("I did not catch that.")
 
     def _voice_session_loop(self) -> None:
-        """ChatGPT-style voice: one wake phrase opens a conversation session.
+        """ChatGPT-style full-duplex voice.
 
-        While active, EVERY sentence is answered - no wake word needed.
-        Silence for SESSION_IDLE_EXIT seconds, or an exit phrase, closes the
-        session and EVO goes back to sleep until woken again.
+        - One wake phrase opens a session; every sentence is answered.
+        - EVO KEEPS LISTENING WHILE TALKING: sustained speech during playback
+          triggers barge-in (audio stops instantly, pending reply cancelled,
+          your interrupting sentence becomes the next command).
+        - Exchanges run on worker threads so audio never stalls.
         """
         from vosk import KaldiRecognizer
 
@@ -383,6 +499,7 @@ class Ear:
         leftover = b""
         active = False
         last_activity = time.time()
+        barge_hits = 0
 
         def sleep_mode() -> None:
             nonlocal active
@@ -397,18 +514,33 @@ class Ear:
             except queue.Empty:
                 if active and time.time() - last_activity > SESSION_IDLE_EXIT:
                     sleep_mode()
-                    _speak_reply("Going back to standby.")
+                    self.say("Going back to standby.")
                 continue
             data = leftover + frame
             usable = len(data) // (FRAME_SAMPLES * 2) * FRAME_SAMPLES * 2
             leftover = data[usable:]
             for i in range(0, usable, FRAME_SAMPLES * 2):
                 chunk = data[i : i + FRAME_SAMPLES * 2]
-                if _speaking.is_set() or time.time() - self.last_hit <= COOLDOWN_SECONDS:
-                    continue
+
+                # ---- BARGE-IN WINDOW: keep listening while talking ----
+                if _speaking.is_set():
+                    if _rms(chunk) > BARGE_IN_RMS:
+                        barge_hits += 1
+                    else:
+                        barge_hits = max(0, barge_hits - 1)
+                    if barge_hits >= 5:  # ~0.5s of sustained speech
+                        barge_hits = 0
+                        self.barge_in()
+                        rec.Reset()
+                        self._drain_audio()
+                        last_activity = time.time()
+                        time.sleep(0.35)  # let the speaker echo tail pass
+                    continue  # never feed playback echo into Vosk
+
+                barge_hits = 0
                 if active and time.time() - last_activity > SESSION_IDLE_EXIT:
                     sleep_mode()
-                    _speak_reply("Going back to standby.")
+                    self.say("Going back to standby.")
                     continue
                 try:
                     is_final = rec.AcceptWaveform(chunk)
@@ -446,30 +578,26 @@ class Ear:
                             sleep_mode()
                             continue
                         print(f"[ear] heard: {rest}", flush=True)
-                        self._handle_exchange(rest)
-                        last_activity = time.time()
-                        self._drain_audio()
+                        self._start_exchange(rest)
                     else:
-                        _speak_reply("I'm listening.")
-                        last_activity = time.time()
-                        self._drain_audio()
+                        self.say("I'm listening.")
                     break
 
                 # ---- ACTIVE: answer every finished sentence ----
                 if not is_final or not heard.strip():
                     continue
+                last_activity = time.time()
                 if is_exit_phrase(heard):
+                    self.barge_in()
                     rec.Reset()
                     self._drain_audio()
                     sleep_mode()
-                    _speak_reply("Very good. Say wake up evo when you need me.")
+                    self.say("Very good. Say wake up evo when you need me.")
                     break
                 rec.Reset()
                 self._drain_audio()
                 print(f"[ear] heard: {heard}", flush=True)
-                self._handle_exchange(heard.strip())
-                last_activity = time.time()
-                self._drain_audio()
+                self._start_exchange(heard.strip())
                 break
 
     def _oww_loop(self, have_vosk: bool) -> None:
@@ -517,11 +645,11 @@ class Ear:
             kwargs["device"] = device
 
         def callback(indata, frames, time_info, status):
-            if not _speaking.is_set():
-                try:
-                    self.audio_q.put_nowait(bytes(indata))
-                except queue.Full:
-                    pass
+            # Audio ALWAYS flows - even while EVO speaks - so interruption works.
+            try:
+                self.audio_q.put_nowait(bytes(indata))
+            except queue.Full:
+                pass
 
         with sd.RawInputStream(samplerate=SAMPLE_RATE, blocksize=FRAME_SAMPLES,
                                dtype="int16", channels=1, callback=callback, **kwargs):

@@ -481,6 +481,7 @@ function setupSpeech() {
 
   async function startOfflineCapture(fromWake = false) {
     if (recording) return;
+    if (currentAudio) { currentAudio.pause(); currentAudio = null; } // barge-in
     try {
       mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },

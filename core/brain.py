@@ -140,6 +140,27 @@ class Brain:
                 reply, meta = result
                 return {"reply": reply, **(meta or {})}
 
+        # Deterministic PC-control first: these MUST be instant and reliable
+        # whether or not the language core is reachable.
+        direct = (
+            self._clear_chat, self._feedback, self._math,
+            self._reminders, self._open, self._search,
+            self._screenshot, self._volume_media, self._status,
+            self._lock, self._power, self._weather,
+            self._settings, self._chains, self._briefing,
+        )
+        for handler in direct:
+            result = handler(text, lowered)
+            if result is not None:
+                if isinstance(result, str):
+                    return {"reply": result, "refresh": []}
+                if isinstance(result, dict):
+                    payload = {k: v for k, v in result.items() if k != "reply"}
+                    return {"reply": result.get("reply", ""), **payload}
+                reply, meta = result
+                return {"reply": reply, **(meta or {})}
+
+        # Genuine conversation / research goes through the agentic brain.
         if config.agent_enabled():
             try:
                 from .agent_loop import run as agent_run
@@ -160,12 +181,8 @@ class Brain:
 
         handlers = (
             self._greetings, self._identity, self._capabilities,
-            self._clear_chat, self._feedback, self._time_date, self._math,
-            self._reminders, self._memory, self._settings, self._swarm,
-            self._code, self._knowledge, self._browse, self._open,
-            self._search, self._screenshot, self._volume_media, self._status,
-            self._lock, self._power, self._weather, self._briefing,
-            self._chains, self._thanks, self._joke, self._flip_coin,
+            self._memory, self._swarm, self._code, self._knowledge,
+            self._browse, self._thanks, self._joke, self._flip_coin,
         )
         for handler in handlers:
             result = handler(text, lowered)
