@@ -422,48 +422,149 @@ async function loadLog(id, li) {
 function setupSpeech() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   const micBtn = $("micBtn");
-  if (!SR) {
-    micBtn.disabled = true;
-    $("sttPreview").textContent = "Speech input needs Chrome or Edge.";
-    return;
-  }
-  recognition = new SR();
-  recognition.lang = "en-GB";
-  recognition.interimResults = true;
-  recognition.continuous = false;
+  let offlineVoice = false;
 
-  recognition.onresult = (e) => {
-    let interim = "", final = "";
-    for (const r of e.results) {
-      if (r.isFinal) final += r[0].transcript;
-      else interim += r[0].transcript;
+  if (!SR) {
+    toast("Cloud speech unavailable — using EVO's offline ear.");
+    offlineVoice = true;
+  }
+
+  if (SR) {
+    recognition = new SR();
+    recognition.lang = "en-GB";
+    recognition.interimResults = true;
+    recognition.continuous = false;
+
+    recognition.onresult = (e) => {
+      let interim = "", final = "";
+      for (const r of e.results) {
+        if (r.isFinal) final += r[0].transcript;
+        else interim += r[0].transcript;
+      }
+      $("sttPreview").textContent = interim || final;
+      if (final && !wakeMode) handleHeard(final.trim(), false);
+      else if (final && wakeMode && !manualListen) handleHeard(final.trim(), true);
+      else if (final && manualListen) handleHeard(final.trim(), false);
+    };
+    recognition.onend = () => {
+      micBtn.classList.remove("on");
+      document.body.classList.remove("listening");
+      if (wakeMode && !manualListen) setTimeout(() => safeStart(), 250);
+      manualListen = false;
+    };
+    recognition.onerror = (e) => {
+      const reasons = {
+        "not-allowed": "Microphone BLOCKED — click the 🔒/mic icon in the address bar and allow it.",
+        "service-not-allowed": "Mic blocked by browser settings — allow microphone for this app.",
+        "no-speech": "Didn't hear anything — try again.",
+        "audio-capture": "No microphone found.",
+        network: "Cloud speech unreachable — switching to EVO's offline ear.",
+      };
+      micBtn.classList.remove("on");
+      document.body.classList.remove("listening");
+      manualListen = false;
+      if (e.error === "network" || e.error === "service-not-allowed") {
+        offlineVoice = true;
+      }
+      toast(reasons[e.error] || `Mic error: ${e.error}`);
+      $("sttPreview").textContent = "";
+      if (offlineVoice && e.error === "network" && wakeMode) startOfflineCapture(true);
+    };
+  }
+
+  /* ---- offline voice: record WAV in-browser -> server Vosk transcribe ---- */
+  let audioCtx = null, mediaStream = null, processor = null, sourceNode = null;
+  let recording = false, speechSeen = false, quietFrames = 0, collected = [];
+  const REC_RATE = 16000, MAX_REC_MS = 9000, SILENCE_FRAMES = 24;
+
+  async function startOfflineCapture(fromWake = false) {
+    if (recording) return;
+    try {
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      });
+    } catch {
+      toast("Microphone BLOCKED — allow mic access for this site.");
+      return;
     }
-    $("sttPreview").textContent = interim || final;
-    if (final && !wakeMode) handleHeard(final.trim(), false);
-    else if (final && wakeMode && !manualListen) handleHeard(final.trim(), true);
-    else if (final && manualListen) handleHeard(final.trim(), false);
-  };
-  recognition.onend = () => {
+    recording = true; speechSeen = false; quietFrames = 0; collected = [];
+    try { audioCtx = new AudioContext({ sampleRate: REC_RATE }); }
+    catch { audioCtx = new AudioContext(); }
+    sourceNode = audioCtx.createMediaStreamSource(mediaStream);
+    processor = audioCtx.createScriptProcessor(2048, 1, 1);
+    const rate = audioCtx.sampleRate;
+    processor.onaudioprocess = (ev) => {
+      if (!recording) return;
+      const input = ev.inputBuffer.getChannelData(0);
+      let peak = 0;
+      for (let i = 0; i < input.length; i++) {
+        const v = Math.abs(input[i]);
+        if (v > peak) peak = v;
+      }
+      if (peak > 0.06) { speechSeen = true; quietFrames = 0; }
+      else if (speechSeen) quietFrames++;
+      for (let i = 0; i < input.length; i++) collected.push(input[i]);
+      const frameMs = (input.length / rate) * 1000;
+      if ((speechSeen && quietFrames * frameMs > 1100) || collected.length / rate * 1000 > MAX_REC_MS) {
+        finishOfflineCapture(rate);
+      }
+    };
+    sourceNode.connect(processor);
+    processor.connect(audioCtx.destination);
+    micBtn.classList.add("on");
+    document.body.classList.add("listening");
+    if (fromWake) $("sttPreview").textContent = "Listening...";
+  }
+
+  async function finishOfflineCapture(rate) {
+    recording = false;
     micBtn.classList.remove("on");
     document.body.classList.remove("listening");
-    if (wakeMode && !manualListen) setTimeout(() => safeStart(), 250);
-    manualListen = false;
-  };
-  recognition.onerror = (e) => {
-    const reasons = {
-      "not-allowed": "Microphone BLOCKED — click the 🔒/mic icon in the address bar and allow it.",
-      "service-not-allowed": "Mic blocked by browser settings — allow microphone for this app.",
-      "no-speech": "Didn't hear anything — try again.",
-      "audio-capture": "No microphone found.",
-      network: "Speech service needs internet.",
-    };
-    toast(reasons[e.error] || `Mic error: ${e.error}`);
-    $("sttPreview").textContent = "";
-  };
+    try { processor.disconnect(); sourceNode.disconnect(); } catch {}
+    try { mediaStream.getTracks().forEach((t) => t.stop()); } catch {}
+    const samples = new Int16Array(collected.length);
+    for (let i = 0; i < collected.length; i++) {
+      const s = Math.max(-1, Math.min(1, collected[i]));
+      samples[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    }
+    collected = [];
+    try { await audioCtx.close(); } catch {}
+    audioCtx = null;
+    const wav = encodeWav(samples, rate);
+    $("sttPreview").textContent = "Transcribing locally...";
+    try {
+      const res = await fetch("/api/transcribe", { method: "POST", body: wav });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      $("sttPreview").textContent = "";
+      const text = (data.text || "").trim();
+      if (!text) { toast("Didn't hear anything — try again."); return; }
+      send(text);
+    } catch (err) {
+      $("sttPreview").textContent = "";
+      toast("Local transcription failed — is the EVO server running?");
+    }
+  }
+
+  function encodeWav(int16, rate) {
+    const buf = new ArrayBuffer(44 + int16.length * 2);
+    const v = new DataView(buf);
+    const ws = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+    ws(0, "RIFF"); v.setUint32(4, 36 + int16.length * 2, true); ws(8, "WAVE");
+    ws(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true);
+    v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    ws(36, "data"); v.setUint32(40, int16.length * 2, true);
+    for (let i = 0; i < int16.length; i++) v.setInt16(44 + i * 2, int16[i], true);
+    return new Blob([buf], { type: "audio/wav" });
+  }
 
   let manualListen = false;
 
-  function safeStart() { try { recognition.start(); } catch {} }
+  function safeStart() {
+    if (offlineVoice) { if (wakeMode) startOfflineCapture(false); return; }
+    try { recognition.start(); } catch {}
+  }
   function handleHeard(text, viaWake) {
     $("sttPreview").textContent = "";
     if (!text) return;
@@ -477,10 +578,22 @@ function setupSpeech() {
   }
   window._handleHeard = handleHeard;
   window._safeStart = safeStart;
+  window._offlineVoice = () => offlineVoice;
 
   micBtn.addEventListener("click", () => {
-    if (micBtn.classList.contains("on")) { manualListen = false; recognition.stop(); return; }
+    if (micBtn.classList.contains("on")) {
+      manualListen = false;
+      if (recording) { speechSeen = true; quietFrames = SILENCE_FRAMES; }
+      else { try { recognition.stop(); } catch {} }
+      return;
+    }
     manualListen = true;
+    if (offlineVoice || !recognition) {
+      startOfflineCapture(false).then(() => {
+        setTimeout(() => { if (recording && !speechSeen) finishOfflineCapture(audioCtx ? audioCtx.sampleRate : REC_RATE); }, 6000);
+      });
+      return;
+    }
     try { recognition.stop(); } catch {}
     setTimeout(() => { micBtn.classList.add("on"); safeStart(); }, 120);
   });
@@ -580,15 +693,19 @@ $("neuralVoiceSelect").addEventListener("change", () => {
 $("wakeMode").addEventListener("change", (e) => {
   wakeMode = e.target.checked;
   localStorage.setItem("evo_wake", wakeMode ? "1" : "0");
-  if (!recognition) return;
-  if (wakeMode) { recognition.continuous = true; window._safeStart(); }
-  else recognition.stop();
+  if (!window._safeStart) return;
+  if (wakeMode) {
+    if (recognition && !window._offlineVoice()) recognition.continuous = true;
+    window._safeStart();
+  } else if (recognition && !window._offlineVoice()) {
+    try { recognition.stop(); } catch {}
+  }
 });
 if (localStorage.getItem("evo_wake") === "1") {
   $("wakeMode").checked = true;
   const armAmbient = () => {
     wakeMode = true;
-    if (recognition) { recognition.continuous = true; window._safeStart(); }
+    if (window._safeStart) window._safeStart();
     document.removeEventListener("click", armAmbient);
     document.removeEventListener("keydown", armAmbient);
   };

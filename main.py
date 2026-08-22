@@ -6,8 +6,9 @@ from typing import Deque
 
 import sys
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
+from fastapi import HTTPException
 from pydantic import BaseModel
 
 from core import config, db, pc
@@ -58,6 +59,7 @@ def _ambient_vision_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    print(f"[evo] host platform={sys.platform} starting on {config.HOST}:{config.PORT}", flush=True)
     db.init_db()
     try:
         from core import skills
@@ -164,6 +166,32 @@ def index() -> FileResponse:
 @app.post("/api/chat")
 def chat(body: ChatIn) -> dict:
     return brain.respond(body.text)
+
+
+@app.post("/api/transcribe")
+async def transcribe(request: Request) -> dict:
+    data = await request.body()
+    if not data:
+        raise HTTPException(status_code=400, detail="no audio received")
+    from core import stt
+
+    try:
+        text = await asyncio.to_thread(stt.transcribe_wav, data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"offline speech engine unavailable: {exc}")
+    return {"text": text}
+
+
+@app.get("/api/transcribe/status")
+def transcribe_status() -> dict:
+    from core import stt
+
+    try:
+        return {"ready": stt.available()}
+    except Exception:
+        return {"ready": False, "error": stt.last_error()}
 
 
 @app.get("/api/status")

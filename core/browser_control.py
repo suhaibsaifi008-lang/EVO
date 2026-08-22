@@ -13,7 +13,8 @@ _page: Optional[object] = None
 
 
 def headless() -> bool:
-    return db.get_setting("browser_headless", "1") == "1"
+    """Visible by default so the user can see what EVO does in the browser."""
+    return db.get_setting("browser_headless", "0") == "1"
 
 
 class BrowserUnavailable(RuntimeError):
