@@ -32,19 +32,131 @@ let lastProjectsRefresh = 0;
   };
 })();
 
-function addMsg(text, who) {
+function addMsg(text, who, opts) {
   const hero = $("hero");
   if (hero) hero.style.display = "none";
+  opts = opts || {};
   const div = document.createElement("div");
   div.className = `msg ${who}`;
   const label = document.createElement("span");
   label.className = "who";
   label.textContent = who === "you" ? "You" : "EVO";
   const body = document.createElement("span");
-  body.textContent = text;
+  body.className = "msg-body";
+  setBody(body, text, who);
   div.append(label, body);
+  if (who !== "you") {
+    const actions = document.createElement("span");
+    actions.className = "msg-actions";
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "mini-act"; copyBtn.title = "Copy"; copyBtn.textContent = "⧉";
+    copyBtn.onclick = () => { navigator.clipboard.writeText(div.dataset.raw || text); toast("Copied."); };
+    actions.appendChild(copyBtn);
+    div.appendChild(actions);
+  }
+  div.dataset.raw = text;
+  const ts = document.createElement("small");
+  ts.className = "msg-ts";
+  ts.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  div.appendChild(ts);
   log.appendChild(div);
   log.scrollTop = log.scrollHeight;
+  return div;
+}
+
+function setBody(el, text, who) {
+  el.dataset.raw = text;
+  if (who === "jarvis" && window.mdRender) el.innerHTML = window.mdRender(text);
+  else el.textContent = text;
+}
+
+/* ---------- streaming conversation ---------- */
+let currentController = null;
+
+function toolChip(name, brief) {
+  let row = $("toolRow-" + log.lastElementChild?.id);
+  const wrap = document.createElement("div");
+  wrap.className = "tool-chip";
+  wrap.innerHTML = `<b>⚙ ${esc(name)}</b><i>${esc(brief)}</i>`;
+  return wrap;
+}
+
+async function sendStreaming(text) {
+  text = (text || "").trim();
+  if (!text) return;
+  addMsg(text, "you");
+  const bubble = addMsg("", "jarvis");
+  bubble.classList.add("streaming");
+  const bodyEl = bubble.querySelector(".msg-body");
+  bodyEl.innerHTML = '<span class="typing"><i></i><i></i><i></i></span>';
+
+  let acc = "";
+  let sawDone = false;
+  currentController = new AbortController();
+  const stopBtn = $("stopBtn");
+  if (stopBtn) stopBtn.classList.add("visible");
+  try {
+    const res = await fetch("/api/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+      signal: currentController.signal,
+    });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 2);
+        if (!line.startsWith("data:")) continue;
+        let ev; try { ev = JSON.parse(line.slice(5)); } catch { continue; }
+        if (ev.type === "thinking" && !acc) {
+          bodyEl.innerHTML = '<span class="typing"><i></i><i></i><i></i></span>';
+        } else if (ev.type === "tool") {
+          const chip = toolChip(ev.name, ev.brief);
+          chip.id = "chip" + Math.random().toString(36).slice(2, 7);
+          bubble.insertBefore(chip, bodyEl);
+        } else if (ev.type === "delta") {
+          acc += ev.text;
+          setBody(bodyEl, acc, "jarvis");
+          log.scrollTop = log.scrollHeight;
+        } else if (ev.type === "done") {
+          sawDone = true;
+          acc = ev.text || acc;
+          setBody(bodyEl, acc, "jarvis");
+        } else if (ev.type === "error" && ev.text && ev.text !== "cancelled") {
+          toast(ev.text);
+        }
+      }
+    }
+    if (!sawDone) setBody(bodyEl, acc || "I hit an issue reaching my core.", "jarvis");
+    speak(acc);
+  } catch (err) {
+    if (!sawDone && !acc) {
+      setBody(bodyEl, "Connection to the server was lost.", "jarvis");
+    }
+  } finally {
+    bubble.classList.remove("streaming");
+    currentController = null;
+    if (stopBtn) stopBtn.classList.remove("visible");
+  }
+}
+
+function stopGeneration() {
+  if (currentController) { currentController.abort(); toast("Stopped."); }
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") stopGeneration();
+});
+
+async function send(text) {
+  await sendStreaming(text);
 }
 
 function browserSpeak(text) {
@@ -76,32 +188,6 @@ async function speak(text, tone) {
     } catch (e) {}
   }
   browserSpeak(text);
-}
-
-async function send(text) {
-  text = (text || "").trim();
-  if (!text) return;
-  addMsg(text, "you");
-  const think = document.createElement("div");
-  think.className = "msg jarvis thinking";
-  think.innerHTML = "<i></i><i></i><i></i>";
-  log.appendChild(think);
-  log.scrollTop = log.scrollHeight;
-  try {
-    const res = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    const data = await res.json();
-    think.remove();
-    addMsg(data.reply, "jarvis");
-    speak(data.reply, data.tone);
-    if (Array.isArray(data.refresh)) data.refresh.forEach(refreshView);
-  } catch (err) {
-    think.remove();
-    addMsg("Connection to the server was lost.", "jarvis");
-  }
 }
 
 function toast(text) {

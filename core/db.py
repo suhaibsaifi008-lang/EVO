@@ -361,9 +361,12 @@ def log_message(role: str, content: str) -> None:
 def recent_messages(limit: int = 24) -> list[dict]:
     with _lock, _connect() as conn:
         rows = conn.execute(
-            "SELECT role, content FROM messages ORDER BY id DESC LIMIT ?", (limit,)
+            "SELECT id, role, content, ts FROM messages ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
-    return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+    return [
+        {"id": r["id"], "role": r["role"], "content": r["content"], "ts": r["ts"]}
+        for r in reversed(rows)
+    ]
 
 
 def clear_messages() -> None:

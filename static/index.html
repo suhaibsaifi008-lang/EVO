@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>E.V.O — Console</title>
-<link rel="stylesheet" href="/static/style.css?v=13" />
+<link rel="stylesheet" href="/static/style.css?v=14" />
 </head>
 <body>
 <div class="app">
@@ -157,6 +157,7 @@
         <div class="stt-preview" id="sttPreview"></div>
         <div class="composer-pill">
           <textarea id="chatInput" rows="1" placeholder="Message EVO…   (Enter to send · Space to talk)"></textarea>
+          <button type="button" id="stopBtn" class="mic stop" title="Stop generating (Esc)">■</button>
           <button type="button" id="micBtn" class="mic" title="Push to talk (Space)"><span></span>MIC</button>
           <button type="submit" class="send" title="Send">➤</button>
         </div>
@@ -190,6 +191,7 @@
 </div>
 
 <div id="toasts"></div>
-<script src="/static/app.js?v=13"></script>
+<script src="/static/markdown.js?v=14"></script>
+<script src="/static/app.js?v=14"></script>
 </body>
 </html>

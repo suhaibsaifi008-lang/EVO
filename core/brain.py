@@ -2,6 +2,7 @@ import ast
 import operator
 import random
 import re
+import threading
 import time as timemod
 from datetime import datetime, timedelta
 
@@ -97,6 +98,11 @@ class Brain:
                 db.log_message("assistant", result.get("reply", ""))
         except Exception:
             pass
+        self._post_turn(text, result.get("reply", ""))
+        return result
+
+    def _post_turn(self, text: str, reply: str) -> None:
+        """Shared housekeeping for every surface (text, voice, telegram)."""
         try:
             from . import habits
 
@@ -104,9 +110,51 @@ class Brain:
             habits.maybe_propose_skill(text)
         except Exception:
             pass
-        return result
+        if not (text or "").strip():
+            return
+        try:
+            from . import conversation
 
-    def _respond_inner(self, text: str) -> dict:
+            conversation.record_turn(text, reply or "")
+            threading.Thread(
+                target=conversation.learn_from_turn,
+                args=(text.strip(), reply or ""),
+                daemon=True,
+                name="evo-memory-learn",
+            ).start()
+        except Exception:
+            pass
+
+    def respond_stream(self, text: str, on_event=None, cancelled=None) -> str:
+        """Streaming variant used by the console UI.
+
+        Emits: {"type": "thinking"} | {"type": "tool", "name", "brief"}
+               | {"type": "delta", "text"} | {"type": "done", "text"}
+        Deterministic intents resolve instantly; everything else flows through
+        the agentic brain with progressive output.
+        """
+        from .agent_loop import run_events
+
+        def done(reply: str, refresh=None):
+            if on_event:
+                on_event({"type": "done", "text": reply})
+            self._post_turn(text, reply)
+            return reply
+
+        result = self._respond_inner(text, stream_hooks=on_event, cancelled=cancelled)
+        reply = result.get("reply", "")
+        try:
+            db.log_message("user", (text or "").strip())
+            db.log_message("assistant", reply)
+        except Exception:
+            pass
+        if not result.get("_streamed"):
+            if on_event:
+                on_event({"type": "done", "text": reply})
+        self._post_turn(text, reply)
+        return reply
+
+    def _respond_inner(self, text: str, stream_hooks=None, cancelled=None) -> dict:
         text = (text or "").strip()
         if not text:
             return {"reply": "I did not catch that.", "refresh": []}
@@ -163,6 +211,21 @@ class Brain:
         # Genuine conversation / research goes through the agentic brain.
         if config.agent_enabled():
             try:
+                if stream_hooks is not None or cancelled is not None:
+                    from .agent_loop import run_events as agent_run
+
+                    answer = agent_run(text, self.history, on_event=stream_hooks,
+                                       cancelled=cancelled)
+                    self.history.extend([
+                        {"role": "user", "content": text},
+                        {"role": "assistant", "content": answer},
+                    ])
+                    if len(self.history) > 24:
+                        del self.history[:-24]
+                    return {
+                        "reply": answer, "_streamed": True,
+                        "refresh": ["reminders", "memory", "knowledge", "workspace"],
+                    }
                 from .agent_loop import run as agent_run
 
                 answer = agent_run(text, self.history)

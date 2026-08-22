@@ -188,6 +188,78 @@ def chat(body: ChatIn) -> dict:
     return brain.respond(body.text)
 
 
+@app.post("/api/chat/stream")
+async def chat_stream(body: ChatIn, request: Request):
+    """Server-Sent Events: progressive conversational replies.
+
+    Emits JSON lines: thinking | tool {name,brief} | delta {text} | done {text}
+    Disconnecting the client cancels generation between steps.
+    """
+    import json as _json
+
+    from fastapi.responses import StreamingResponse
+
+    state = {"cancelled": False}
+
+    async def event_source():
+        queue: Deque[dict] = deque()
+
+        def on_event(ev: dict) -> None:
+            queue.append(ev)
+
+        # run the (possibly slow) brain in a worker thread; drain events here
+        loop = asyncio.get_running_loop()
+        result_box: dict = {}
+
+        def work() -> None:
+            try:
+                reply = brain.respond_stream(body.text, on_event=on_event,
+                                             cancelled=lambda: state["cancelled"])
+                result_box["reply"] = reply
+            except Exception as exc:  # never leave the client hanging
+                result_box["reply"] = f"Something went wrong handling that: {exc}"
+                queue.append({"type": "error", "text": str(exc)[:160]})
+
+        task = loop.run_in_executor(None, work)
+        while not task.done() or queue:
+            if await request.is_disconnected():
+                state["cancelled"] = True
+            while queue:
+                ev = queue.popleft()
+                yield f"data: {_json.dumps(ev, ensure_ascii=False)}\n\n"
+            if task.done():
+                break
+            await asyncio.sleep(0.05)
+        while queue:
+            ev = queue.popleft()
+            yield f"data: {_json.dumps(ev, ensure_ascii=False)}\n\n"
+        yield f"data: {_json.dumps({'type': 'end'})}\n\n"
+
+    async def guard():
+        try:
+            async for chunk in event_source():
+                yield chunk
+        except asyncio.CancelledError:
+            state["cancelled"] = True
+            raise
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/debug/llm")
+def debug_llm() -> dict:
+    from core import llm
+
+    try:
+        return llm.diagnostics()
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
 @app.post("/api/transcribe")
 async def transcribe(request: Request) -> dict:
     data = await request.body()

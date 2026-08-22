@@ -70,8 +70,8 @@ class TestExitPhrases:
 class TestAgentPromptActsInsteadOfLecturing:
     def test_prompt_forbids_reciting_tools(self):
         lowered = SYSTEM_TEMPLATE.lower()
-        assert "never recite" in lowered or "never ask which command" in lowered
-        assert "act first" in lowered
+        assert "never recite" in lowered
+        assert "never mention internal steps" in lowered or "act, then report" in lowered
 
 
 class TestDispatcherNoReplay:

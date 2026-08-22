@@ -1,6 +1,7 @@
 import ctypes
 import json
 import os
+import re
 import queue
 import subprocess
 import threading
@@ -308,6 +309,25 @@ def is_exit_phrase(text: str) -> bool:
     return any(p in t for p in EXIT_PHRASES)
 
 
+def _sentence_chunks(text: str, max_len: int = 260) -> list[str]:
+    """Split a reply into speakable sentence chunks for pipelined TTS."""
+    text = " ".join((text or "").split())
+    if len(text) <= max_len:
+        return [text] if text else []
+    parts = re.split(r"(?<=[.!?])\s+", text)
+    chunks: list[str] = []
+    cur = ""
+    for part in parts:
+        if cur and len(cur) + 1 + len(part) > max_len:
+            chunks.append(cur)
+            cur = part
+        else:
+            cur = f"{cur} {part}".strip()
+    if cur:
+        chunks.append(cur)
+    return chunks or [text]
+
+
 class Ear:
     def __init__(self) -> None:
         self.audio_q: "queue.Queue[bytes]" = queue.Queue(maxsize=400)
@@ -319,14 +339,62 @@ class Ear:
         self.stop_tts = threading.Event()  # set to silence playback instantly
 
     def say(self, text: str, blocking: bool = False) -> None:
-        """Speak text. Non-blocking by default; always interruptible."""
+        """Speak text. Non-blocking by default; always interruptible.
+
+        Long replies are spoken as pipelined sentence chunks: the next chunk
+        is synthesized while the previous one plays, cutting time-to-voice.
+        """
         self.stop_tts.clear()
-        if blocking:
-            _speak_reply(text, self.stop_tts)
+        chunks = _sentence_chunks(text)
+        if len(chunks) <= 1:
+            if blocking:
+                _speak_reply(text, self.stop_tts)
+            else:
+                threading.Thread(
+                    target=_speak_reply, args=(text, self.stop_tts), daemon=True, name="evo-speak"
+                ).start()
             return
-        threading.Thread(
-            target=_speak_reply, args=(text, self.stop_tts), daemon=True, name="evo-speak"
-        ).start()
+
+        def pipeline() -> None:
+            from .tts import synthesize
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=1) as pre:
+                nxt = pre.submit(self._synth_safe, chunks[0])
+                for i, chunk in enumerate(chunks):
+                    if self.stop_tts.is_set():
+                        return
+                    cur_path = nxt.result()
+                    if i + 1 < len(chunks):
+                        nxt = pre.submit(self._synth_safe, chunks[i + 1])
+                    if cur_path is None:
+                        _speak_reply(chunks[i], self.stop_tts)
+                        continue
+                    _speaking.set()
+                    try:
+                        alias = _mci_start(cur_path)
+                        if not alias:
+                            _sapi_speak(chunk, self.stop_tts)
+                            continue
+                        while _mci_playing(alias):
+                            if self.stop_tts.is_set():
+                                break
+                            time.sleep(0.12)
+                        _mci_close(alias)
+                    finally:
+                        _speaking.clear()
+
+        threading.Thread(target=pipeline, daemon=True, name="evo-speak-pipe").start()
+
+    @staticmethod
+    def _synth_safe(text: str):
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+            from core.tts import synthesize
+
+            return synthesize(text[:400])
+        except Exception:
+            return None
 
     def barge_in(self) -> None:
         """User started talking: kill audio and invalidate pending replies."""

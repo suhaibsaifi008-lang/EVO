@@ -6,7 +6,7 @@ A local personal assistant in the JARVIS tradition. Hears the wake word anywhere
 
 **Senses** — wake phrase ("wake up evo", configurable in `.env`) · offline Vosk transcription · screen-free voice loop (speak → it answers aloud) · neural TTS with alert/calm/warm tones · screen vision · ambient window awareness · opt-in ambient vision · welcome-back greeting after long absences
 
-**Mind** — agentic brain (~50 tools) · Deep Thought ensemble · Deep Mode self-critique · fast/strong model routing · feedback memory ("from now on always...") · habit engine with skill proposals · 3-layer persistent memory · relevant-knowledge injection
+**Mind** — conversational core (context manager, rolling summaries, reference resolution, memory extraction policy) · model router with roles (primary/fast/reasoning/vision/fallback across any OpenAI-compatible provider + Ollama) · streaming SSE replies in the console · Deep Thought ensemble · Deep Mode self-critique · feedback memory · habit engine with skill proposals · 3-layer persistent memory · relevant-knowledge injection
 
 **Body & work** — app/web launching (Start Menu + Microsoft Store apps) · screenshots · volume/media · GUI control incl. vision-guided clicking *(gated)* · coding sandbox w/ self-debugging · AI worker teams · resumable missions (up to 200 steps) · watchers (battery/disk/web/news) · reminders/timers/alarms · briefing v2 (calendar + schedule + weather + battery)
 
