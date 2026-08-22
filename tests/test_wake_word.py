@@ -1,7 +1,8 @@
 import pytest
 
 from core import db
-from core.listener import match_wake_phrase, normalize_text
+from core.listener import is_exit_phrase, match_wake_phrase, normalize_text
+from core.agent_loop import SYSTEM_TEMPLATE
 
 
 @pytest.fixture()
@@ -41,6 +42,11 @@ class TestMatchWakePhrase:
         assert match_wake_phrase("wake up eva open chrome") is not None
         assert match_wake_phrase("woke up evo") is not None
 
+    def test_merged_speech_still_triggers(self):
+        # Vosk often merges words: "wakeup evo" (2 tokens) must still wake.
+        rest = match_wake_phrase("wakeup evo")
+        assert rest == ""
+
     def test_unrelated_speech_does_not_trigger(self):
         assert match_wake_phrase("what time is it") is None
         assert match_wake_phrase("play some music please") is None
@@ -48,6 +54,24 @@ class TestMatchWakePhrase:
 
     def test_custom_phrase_list(self):
         assert match_wake_phrase("yo assistant status", phrases=["yo assistant"]) == "status"
+
+
+class TestExitPhrases:
+    def test_exit_phrases_match(self):
+        assert is_exit_phrase("evo stop listening now")
+        assert is_exit_phrase("goodbye")
+        assert is_exit_phrase("that will be all for today")
+
+    def test_normal_commands_are_not_exits(self):
+        assert not is_exit_phrase("open chrome")
+        assert not is_exit_phrase("what's the weather")
+
+
+class TestAgentPromptActsInsteadOfLecturing:
+    def test_prompt_forbids_reciting_tools(self):
+        lowered = SYSTEM_TEMPLATE.lower()
+        assert "never recite" in lowered or "never ask which command" in lowered
+        assert "act first" in lowered
 
 
 class TestDispatcherNoReplay:

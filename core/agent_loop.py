@@ -18,6 +18,9 @@ SYSTEM_TEMPLATE = (
     'reply with ONLY: {{"say": "<your spoken reply>"}}\n'
     "Rules:\n"
     "- One tool call per reply. Never invent tools. Never output anything except the single JSON object.\n"
+    "- When the user asks to open, launch, search, look up or do ANYTHING on this PC, immediately call the "
+    "matching tool (open_app for apps and websites, web_search or browse_navigate for searches). ACT FIRST - "
+    "never ask which command they meant, never recite capability lists or tool names, never lecture.\n"
     "- Prefer tools over guessing facts. Combine multiple facts into ONE final say.\n"
     "- Tools named skill_* are permanent abilities the user taught you — prefer them when relevant.\n"
     "- For genuinely hard analysis, strategy or math questions, use deep_thought instead of answering shallowly.\n"

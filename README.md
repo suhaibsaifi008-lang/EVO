@@ -51,12 +51,11 @@ Code execution, GUI control and real email sending are each separately gated (vo
 
 ## Voice commands to try
 
-- Wake word → chime → speak naturally (agent mode has no fixed phrases)
-- "Open Copilot" · "Open Valorant" · "Search for cheap flights to Tokyo"
-- "Index my documents folder, then what did I write about the insurance claim?"
-- "Start a project: research the 5 best budget monitors, compare them, save a report"
-- "Learn the skill: check my public IP and log it"
-- "Watch this product page and tell me when the price changes"
+**How talking works (ChatGPT-style):** say **"wake up evo"** once — EVO chimes and opens a live conversation. Then just talk: every sentence is answered without repeating the wake word. Say "stop listening", "goodbye", or stay silent for 45 seconds and EVO goes back to standby until you wake it again. Works the same through the desktop ear and the web console's mic (with Wake mode enabled).
+
+- "wake up evo, open Valorant" — command rides in the same breath
+- Then keep chatting: "what's the weather", "search for cheap flights to Tokyo", "open Copilot"
+- "Wake this product page and tell me when the price changes"
 - "Read my unread mail and draft replies"
 - "Click the accept button" (with GUI control enabled)
 - "Build me a website for my bakery with about and contact pages"

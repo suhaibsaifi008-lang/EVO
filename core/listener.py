@@ -39,6 +39,15 @@ WAKE_PHRASES = [
 ]
 WAKE_FUZZY_THRESHOLD = 0.8
 
+# Conversation session (ChatGPT-voice style): one wake phrase starts a live
+# dialogue; every sentence is answered without repeating the wake word.
+SESSION_IDLE_EXIT = 45.0  # seconds of silence before the session closes
+EXIT_PHRASES = (
+    "stop listening", "go to sleep", "go away", "that will be all",
+    "that'll be all", "goodbye", "good bye", "thank you goodbye",
+    "sleep now", "end session",
+)
+
 _speaking = threading.Event()
 
 
@@ -173,8 +182,8 @@ def normalize_text(text: str) -> str:
 def match_wake_phrase(text: str, phrases: list[str] | None = None) -> str | None:
     """Return the remainder of the utterance after a wake phrase, else None.
 
-    Tolerant to mishearings ("wake up evil" still triggers) via a sliding
-    word-window similarity check.
+    Tolerant to mishearings ("wake up evil", "wakeup evo") via word-window and
+    character-level similarity checks.
     """
     from difflib import SequenceMatcher
 
@@ -183,6 +192,7 @@ def match_wake_phrase(text: str, phrases: list[str] | None = None) -> str | None
         return None
     words = t.split()
     joined = " ".join(words)
+    compact = t.replace(" ", "")
     for phrase in (phrases if phrases is not None else WAKE_PHRASES):
         p = normalize_text(phrase)
         pw = p.split()
@@ -191,12 +201,45 @@ def match_wake_phrase(text: str, phrases: list[str] | None = None) -> str | None
         idx = joined.find(p)
         if idx >= 0:
             return joined[idx + len(p):].strip()
+        # Compact containment catches merged speech like "wakeup evo".
+        c_idx = compact.find(p.replace(" ", ""))
+        if c_idx >= 0 and c_idx <= 2:  # only when the wake leads the utterance
+            return ""
         n = len(pw)
         for i in range(0, max(1, len(words) - n + 1)):
             window = " ".join(words[i : i + n])
             if SequenceMatcher(None, window, p).ratio() >= WAKE_FUZZY_THRESHOLD:
                 return " ".join(words[i + n:]).strip()
+    # Character-level fuzzy scan for garbled transcriptions.
+    for phrase in (phrases if phrases is not None else WAKE_PHRASES):
+        p = normalize_text(phrase).replace(" ", "")
+        if not p:
+            continue
+        pc = compact
+        if len(pc) < max(4, len(p) - 3):
+            continue
+        step = 1
+        for i in range(0, max(1, len(pc) - len(p) + 1), step):
+            window = pc[i : i + len(p)]
+            if abs(len(window) - len(p)) > 2:
+                continue
+            if SequenceMatcher(None, window, p).ratio() >= WAKE_FUZZY_THRESHOLD:
+                tail_index = i + len(p)
+                # Map back roughly to a word boundary for the remainder.
+                consumed = len(" ".join(words)[: max(tail_index, 1)])
+                rest_words = []
+                seen = 0
+                for w in words:
+                    seen += len(w) + 1
+                    if seen > tail_index:
+                        rest_words.append(w)
+                return " ".join(rest_words).strip()
     return None
+
+
+def is_exit_phrase(text: str) -> bool:
+    t = normalize_text(text)
+    return any(p in t for p in EXIT_PHRASES)
 
 
 class Ear:
@@ -326,28 +369,46 @@ class Ear:
             else:
                 _speak_reply("I did not catch that.")
 
-    def _phrase_loop(self) -> None:
-        """Wake-word detection by matching phrases in live Vosk transcripts.
+    def _voice_session_loop(self) -> None:
+        """ChatGPT-style voice: one wake phrase opens a conversation session.
 
-        Bonus: the command can ride in the same breath - 'wake up evo,
-        what's the weather' fires immediately with the rest as the command.
+        While active, EVERY sentence is answered - no wake word needed.
+        Silence for SESSION_IDLE_EXIT seconds, or an exit phrase, closes the
+        session and EVO goes back to sleep until woken again.
         """
         from vosk import KaldiRecognizer
 
         rec = KaldiRecognizer(self.vosk_model, SAMPLE_RATE)
         rec.SetWords(False)
         leftover = b""
+        active = False
+        last_activity = time.time()
+
+        def sleep_mode() -> None:
+            nonlocal active
+            if active:
+                print("[ear] conversation closed - sleeping", flush=True)
+            active = False
+            _write_status("wake-phrase (vosk)", self.wake_count)
+
         while True:
             try:
                 frame = self.audio_q.get(timeout=1.0)
             except queue.Empty:
+                if active and time.time() - last_activity > SESSION_IDLE_EXIT:
+                    sleep_mode()
+                    _speak_reply("Going back to standby.")
                 continue
             data = leftover + frame
             usable = len(data) // (FRAME_SAMPLES * 2) * FRAME_SAMPLES * 2
             leftover = data[usable:]
             for i in range(0, usable, FRAME_SAMPLES * 2):
                 chunk = data[i : i + FRAME_SAMPLES * 2]
-                if time.time() - self.last_hit <= COOLDOWN_SECONDS or _speaking.is_set():
+                if _speaking.is_set() or time.time() - self.last_hit <= COOLDOWN_SECONDS:
+                    continue
+                if active and time.time() - last_activity > SESSION_IDLE_EXIT:
+                    sleep_mode()
+                    _speak_reply("Going back to standby.")
                     continue
                 try:
                     is_final = rec.AcceptWaveform(chunk)
@@ -364,12 +425,51 @@ class Ear:
                         heard = json.loads(rec.PartialResult()).get("partial", "")
                     except Exception:
                         heard = ""
-                rest = match_wake_phrase(heard)
-                if rest is None:
+
+                # ---- SLEEPING: watch for the wake phrase (partials OK) ----
+                if not active:
+                    rest = match_wake_phrase(heard)
+                    if rest is None:
+                        continue
+                    self.wake_count += 1
+                    self.last_hit = time.time()
+                    active = True
+                    last_activity = time.time()
+                    _write_status("conversation active", self.wake_count)
+                    print("[ear] wake phrase detected - session open", flush=True)
+                    _chime()
+                    _notify_server_wake()
+                    rec.Reset()
+                    self._drain_audio()
+                    if rest.strip():
+                        if is_exit_phrase(rest):
+                            sleep_mode()
+                            continue
+                        print(f"[ear] heard: {rest}", flush=True)
+                        self._handle_exchange(rest)
+                        last_activity = time.time()
+                        self._drain_audio()
+                    else:
+                        _speak_reply("I'm listening.")
+                        last_activity = time.time()
+                        self._drain_audio()
+                    break
+
+                # ---- ACTIVE: answer every finished sentence ----
+                if not is_final or not heard.strip():
                     continue
+                if is_exit_phrase(heard):
+                    rec.Reset()
+                    self._drain_audio()
+                    sleep_mode()
+                    _speak_reply("Very good. Say wake up evo when you need me.")
+                    break
                 rec.Reset()
                 self._drain_audio()
-                self._on_wake(rest)
+                print(f"[ear] heard: {heard}", flush=True)
+                self._handle_exchange(heard.strip())
+                last_activity = time.time()
+                self._drain_audio()
                 break
 
     def _oww_loop(self, have_vosk: bool) -> None:
@@ -426,7 +526,7 @@ class Ear:
         with sd.RawInputStream(samplerate=SAMPLE_RATE, blocksize=FRAME_SAMPLES,
                                dtype="int16", channels=1, callback=callback, **kwargs):
             if self.phrase_mode:
-                self._phrase_loop()
+                self._voice_session_loop()
             else:
                 self._oww_loop(have_vosk)
 

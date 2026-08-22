@@ -518,6 +518,18 @@ function setupSpeech() {
     if (fromWake) $("sttPreview").textContent = "Listening...";
   }
 
+  /* ---- ChatGPT-style session: after a reply, keep listening hands-free ---- */
+  let sessionOpen = false;
+  let sessionEmpties = 0;
+  function sessionRearm(delay = 1200) {
+    if (!wakeMode || manualListen || !offlineVoice) return;
+    if (!sessionOpen) {
+      if (sessionEmpties >= 3) toast("Session paused — say the wake word or press MIC to continue.");
+      return;
+    }
+    setTimeout(() => { if (wakeMode && !manualListen && offlineVoice && !recording) safeStart(); }, delay);
+  }
+
   async function finishOfflineCapture(rate) {
     recording = false;
     micBtn.classList.remove("on");
@@ -540,33 +552,58 @@ function setupSpeech() {
         if (res.status === 503) toast("Offline speech engine not ready — run start.bat once to install it, then retry.");
         else if (res.status === 404) toast("EVO server is an old build — run stop-evo.bat, then start.bat.");
         else toast(`Transcription failed (${res.status}).`);
+        sessionRearm(2500);
         return;
       }
       const data = await res.json();
       $("sttPreview").textContent = "";
       let text = (data.text || "").trim();
-      if (!text) { toast("Didn't hear anything — try again."); return; }
+      if (!text) {
+        sessionEmpties++;
+        toast("Didn't hear anything — try again.");
+        sessionRearm(800);
+        return;
+      }
       if (wakeMode && !manualListen) {
-        const stripped = stripWakePhrase(text);
-        if (stripped === null) {
-          toast(`Ignored — say "${(wakePhrases[0] || "wake up evo")} ..." first.`);
-          $("sttPreview").textContent = "";
-          setTimeout(() => { if (wakeMode && !manualListen && offlineVoice) safeStart(); }, 500);
+        if (isExitUtterance(text)) {
+          sessionOpen = false;
+          sessionEmpties = 0;
+          toast("Session closed. Say the wake word or press MIC when you need me.");
           return;
         }
-        text = stripped;
-        if (!text) {
-          // Woke with no command — listen for the command right away.
-          $("sttPreview").textContent = "Listening...";
-          setTimeout(() => { if (wakeMode && !manualListen && offlineVoice) safeStart(); }, 400);
+        const stripped = stripWakePhrase(text);
+        if (stripped !== null) {
+          // Wake phrase present: opens/continues the session.
+          sessionOpen = true;
+          sessionEmpties = 0;
+          text = stripped;
+          if (!text) {
+            $("sttPreview").textContent = "I'm listening...";
+            setTimeout(() => { if (wakeMode && !manualListen && offlineVoice && !recording) safeStart(); }, 400);
+            return;
+          }
+        } else if (!sessionOpen) {
+          // Not woken yet: ignore chatter, keep a low-cost ear open.
+          sessionEmpties++;
+          sessionRearm(800);
           return;
+        } else {
+          sessionEmpties = 0; // mid-session sentence - answered freely
         }
       }
       send(text);
+      sessionRearm(1500);
     } catch (err) {
       $("sttPreview").textContent = "";
       toast("Cannot reach the EVO server — is it running? Try start.bat.");
+      sessionRearm(2500);
     }
+  }
+
+  function isExitUtterance(text) {
+    const t = normalizeForWake(text);
+    return ["stop listening", "go to sleep", "go away", "that will be all", "goodbye", "end session"]
+      .some((p) => t.includes(p));
   }
 
   function encodeWav(int16, rate) {
@@ -639,6 +676,8 @@ function setupSpeech() {
       return;
     }
     manualListen = true;
+    sessionOpen = true;
+    sessionEmpties = 0;
     if (offlineVoice || !recognition) {
       startOfflineCapture(false).then(() => {
         setTimeout(() => { if (recording && !speechSeen) finishOfflineCapture(audioCtx ? audioCtx.sampleRate : REC_RATE); }, 6000);
