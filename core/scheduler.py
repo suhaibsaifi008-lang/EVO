@@ -22,10 +22,11 @@ class Dispatcher(threading.Thread):
         self._last_welcome = 0.0
 
     def subscribe(self) -> Deque[Dict]:
+        """Register a live subscriber. Old backlog events are deliberately NOT
+        replayed: the console re-subscribes on every poll, so seeding queues
+        with history made announcements repeat forever."""
         q: Deque[Dict] = deque(maxlen=50)
         with self._lock:
-            for event in list(self.backlog):
-                q.append(dict(event))
             self._subscribers.append(q)
         return q
 

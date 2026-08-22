@@ -175,8 +175,12 @@ class ReminderIn(BaseModel):
 
 
 @app.get("/")
-def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+def index() -> Response:
+    return Response(
+        content=(STATIC_DIR / "index.html").read_bytes(),
+        media_type="text/html; charset=utf-8",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @app.post("/api/chat")
@@ -376,17 +380,22 @@ def watcher_list() -> list[dict]:
 
 @app.get("/api/tts")
 def tts(text: str, voice: str = "", tone: str = ""):
-    from fastapi import HTTPException, Response
+    from fastapi import Response
     from core import tts as tts_mod
 
     try:
         path = tts_mod.synthesize(text, voice, tone=tone)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
+        media = "audio/mpeg"
+    except Exception:
+        try:
+            path = tts_mod.synthesize_offline(text, tone=tone)
+            media = "audio/wav"
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"speech unavailable offline and online: {exc}")
     tts_mod.cleanup()
     return Response(
         content=path.read_bytes(),
-        media_type="audio/mpeg",
+        media_type=media,
         headers={"Cache-Control": "public, max-age=86400"},
     )
 

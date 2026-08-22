@@ -4,7 +4,7 @@ A local personal assistant in the JARVIS tradition. Hears the wake word anywhere
 
 ## The complete ability map
 
-**Senses** — wake-word ear (local model) · offline Vosk transcription · screen-free voice loop (speak → it answers aloud) · neural TTS with alert/calm/warm tones · screen vision · ambient window awareness · opt-in ambient vision · welcome-back greeting after long absences
+**Senses** — wake phrase ("wake up evo", configurable in `.env`) · offline Vosk transcription · screen-free voice loop (speak → it answers aloud) · neural TTS with alert/calm/warm tones · screen vision · ambient window awareness · opt-in ambient vision · welcome-back greeting after long absences
 
 **Mind** — agentic brain (~50 tools) · Deep Thought ensemble · Deep Mode self-critique · fast/strong model routing · feedback memory ("from now on always...") · habit engine with skill proposals · 3-layer persistent memory · relevant-knowledge injection
 
@@ -74,5 +74,5 @@ pytest tests -q
 
 - Server binds localhost only; data lives in `data/` — delete `data/evo.db` to factory-reset.
 - `.env` holds secrets; keep it private (it's git-ignored).
-- The spoken call sign remains "hey jarvis" (pretrained audio model); custom-phrase training possible later.
-- First server start downloads a ~40MB local speech model once (used by the mic's offline fallback).
+- Wake phrases are set with `JARVIS_WAKE_PHRASES` in `.env` (default: "wake up evo"). Leave it empty to use the pretrained "hey jarvis" audio model instead.
+- First server start downloads a ~40MB local speech model once (used for the wake phrase, the mic's offline fallback, and command transcription).

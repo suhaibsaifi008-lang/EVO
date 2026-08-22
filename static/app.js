@@ -534,7 +534,12 @@ function setupSpeech() {
     $("sttPreview").textContent = "Transcribing locally...";
     try {
       const res = await fetch("/api/transcribe", { method: "POST", body: wav });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) {
+        if (res.status === 503) toast("Offline speech engine not ready — run start.bat once to install it, then retry.");
+        else if (res.status === 404) toast("EVO server is an old build — run stop-evo.bat, then start.bat.");
+        else toast(`Transcription failed (${res.status}).`);
+        return;
+      }
       const data = await res.json();
       $("sttPreview").textContent = "";
       const text = (data.text || "").trim();
@@ -542,16 +547,7 @@ function setupSpeech() {
       send(text);
     } catch (err) {
       $("sttPreview").textContent = "";
-      let detail = "";
-      try {
-        const j = JSON.parse(String((err && err.message) || ""));
-        detail = String(j.detail || "");
-      } catch { detail = String((err && err.message) || ""); }
-      if (detail.includes("unavailable") || detail.includes("model")) {
-        toast(`Offline voice engine: ${detail.slice(0, 160)}`);
-      } else {
-        toast("Local transcription failed — is the EVO server running?");
-      }
+      toast("Cannot reach the EVO server — is it running? Try start.bat.");
     }
   }
 
@@ -578,7 +574,8 @@ function setupSpeech() {
     $("sttPreview").textContent = "";
     if (!text) return;
     if (viaWake) {
-      const m = text.toLowerCase().replace(/[.,!?]/g, "").match(/^(?:jarvis|evo|evvo)[, ]*(.*)$/);
+      const m = text.toLowerCase().replace(/[.,!?]/g, "")
+        .match(/^(?:jarvis|evo|evvo|hey evo|okay evo|wake ?up evo|wake up eva)[,\s]*(.*)$/);
       if (!m) return;
       text = m[1].trim();
       if (!text) return;

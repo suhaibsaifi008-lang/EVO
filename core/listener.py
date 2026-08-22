@@ -24,6 +24,16 @@ MODELS_DIR = DATA_DIR / "models"
 VOSK_DIR = MODELS_DIR / "vosk"
 VOSK_ZIP_URL = "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.22.zip"
 
+# Wake phrases: comma-separated. Matched offline against live Vosk transcripts,
+# so ANY phrase works (default: "wake up evo"). Set JARVIS_WAKE_PHRASES= (empty)
+# to fall back to the pretrained openWakeWord "hey jarvis" audio model instead.
+WAKE_PHRASES = [
+    p.strip().lower()
+    for p in os.environ.get("JARVIS_WAKE_PHRASES", "wake up evo,wake up e.v.o").split(",")
+    if p.strip()
+]
+WAKE_FUZZY_THRESHOLD = 0.8
+
 _speaking = threading.Event()
 
 
@@ -141,6 +151,41 @@ def _rms(frame: bytes) -> float:
     return (total / len(samples)) ** 0.5
 
 
+def normalize_text(text: str) -> str:
+    import re as _re
+
+    return _re.sub(r"\s+", " ", _re.sub(r"[^a-z0-9 ]+", " ", (text or "").lower())).strip()
+
+
+def match_wake_phrase(text: str, phrases: list[str] | None = None) -> str | None:
+    """Return the remainder of the utterance after a wake phrase, else None.
+
+    Tolerant to mishearings ("wake up evil" still triggers) via a sliding
+    word-window similarity check.
+    """
+    from difflib import SequenceMatcher
+
+    t = normalize_text(text)
+    if not t:
+        return None
+    words = t.split()
+    joined = " ".join(words)
+    for phrase in (phrases if phrases is not None else WAKE_PHRASES):
+        p = normalize_text(phrase)
+        pw = p.split()
+        if not pw:
+            continue
+        idx = joined.find(p)
+        if idx >= 0:
+            return joined[idx + len(p):].strip()
+        n = len(pw)
+        for i in range(0, max(1, len(words) - n + 1)):
+            window = " ".join(words[i : i + n])
+            if SequenceMatcher(None, window, p).ratio() >= WAKE_FUZZY_THRESHOLD:
+                return " ".join(words[i + n:]).strip()
+    return None
+
+
 class Ear:
     def __init__(self) -> None:
         self.audio_q: "queue.Queue[bytes]" = queue.Queue(maxsize=400)
@@ -149,9 +194,6 @@ class Ear:
         self.last_hit = 0.0
 
     def load(self) -> tuple[bool, bool]:
-        from openwakeword.model import Model
-
-        self.oww = Model(wakeword_models=["hey_jarvis"], inference_framework="onnx")
         have_vosk = False
         try:
             import vosk  # noqa: F401
@@ -162,7 +204,20 @@ class Ear:
                 have_vosk = True
         except Exception as exc:
             print(f"[ear] local transcription unavailable: {exc}", flush=True)
+        if WAKE_PHRASES:
+            if have_vosk:
+                # Phrase mode uses Vosk transcripts; no openWakeWord needed.
+                return False, True
+            print("[ear] wake-phrase mode needs the local speech model - "
+                  "falling back to openWakeWord.", flush=True)
+        from openwakeword.model import Model
+
+        self.oww = Model(wakeword_models=["hey_jarvis"], inference_framework="onnx")
         return True, have_vosk
+
+    @property
+    def phrase_mode(self) -> bool:
+        return bool(WAKE_PHRASES) and self.vosk_model is not None and self.oww is None
 
     def _feed_oww(self, frame: bytes) -> bool:
         import numpy as np
@@ -222,12 +277,109 @@ class Ear:
                    "user_text": text, "text": reply})
         _speak_reply(reply)
 
+    def _on_wake(self, command: str = "") -> None:
+        """Common wake handling: chime, notify HUD, then run the command."""
+        self.last_hit = time.time()
+        print("[ear] wake phrase detected", flush=True)
+        _chime()
+        _notify_server_wake()
+        text = (command or "").strip()
+        if text:
+            print(f"[ear] heard: {text}", flush=True)
+            self._handle_exchange(text)
+            return
+        if self.vosk_model:
+            command = self._record_command()
+            if command:
+                print(f"[ear] heard: {command}", flush=True)
+                self._handle_exchange(command)
+            else:
+                _speak_reply("I did not catch that.")
+
+    def _phrase_loop(self) -> None:
+        """Wake-word detection by matching phrases in live Vosk transcripts.
+
+        Bonus: the command can ride in the same breath - 'wake up evo,
+        what's the weather' fires immediately with the rest as the command.
+        """
+        from vosk import KaldiRecognizer
+
+        rec = KaldiRecognizer(self.vosk_model, SAMPLE_RATE)
+        rec.SetWords(False)
+        leftover = b""
+        while True:
+            try:
+                frame = self.audio_q.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            data = leftover + frame
+            usable = len(data) // (FRAME_SAMPLES * 2) * FRAME_SAMPLES * 2
+            leftover = data[usable:]
+            for i in range(0, usable, FRAME_SAMPLES * 2):
+                chunk = data[i : i + FRAME_SAMPLES * 2]
+                if time.time() - self.last_hit <= COOLDOWN_SECONDS or _speaking.is_set():
+                    continue
+                try:
+                    is_final = rec.AcceptWaveform(chunk)
+                except Exception:
+                    continue
+                heard = ""
+                if is_final:
+                    try:
+                        heard = json.loads(rec.FinalResult()).get("text", "")
+                    except Exception:
+                        heard = ""
+                if not heard:
+                    try:
+                        heard = json.loads(rec.PartialResult()).get("partial", "")
+                    except Exception:
+                        heard = ""
+                rest = match_wake_phrase(heard)
+                if rest is None:
+                    continue
+                rec.Reset()
+                self._drain_audio()
+                self._on_wake(rest)
+                break
+
+    def _oww_loop(self, have_vosk: bool) -> None:
+        leftover = b""
+        while True:
+            try:
+                frame = self.audio_q.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            data = leftover + frame
+            usable = len(data) // (FRAME_SAMPLES * 2) * FRAME_SAMPLES * 2
+            leftover = data[usable:]
+            for i in range(0, usable, FRAME_SAMPLES * 2):
+                chunk = data[i : i + FRAME_SAMPLES * 2]
+                now = time.time()
+                if now - self.last_hit <= COOLDOWN_SECONDS or _speaking.is_set():
+                    continue
+                if self._feed_oww(chunk):
+                    self.oww.reset()
+                    self._drain_audio()
+                    self._on_wake()
+                    break
+
+    def _drain_audio(self) -> None:
+        try:
+            while True:
+                self.audio_q.get_nowait()
+        except queue.Empty:
+            pass
+
     def run(self) -> None:
         import sounddevice as sd
 
-        have_vosk = self.load()
-        mode = "full-duplex voice" if have_vosk else "wake-only (no local STT)"
-        print(f"[ear] online - {mode}. Say 'Hey Jarvis'.", flush=True)
+        oww_ok, have_vosk = self.load()
+        if self.phrase_mode:
+            mode = f"wake phrase '{WAKE_PHRASES[0]}'"
+        else:
+            mode = ("full-duplex voice" if have_vosk else "wake-only (no local STT)")
+        hint = f"Say '{WAKE_PHRASES[0]}'." if WAKE_PHRASES else "Say 'Hey Jarvis'."
+        print(f"[ear] online - {mode}. {hint}", flush=True)
 
         device = int(MIC_DEVICE) if MIC_DEVICE.isdigit() else None
         kwargs = {}
@@ -243,34 +395,10 @@ class Ear:
 
         with sd.RawInputStream(samplerate=SAMPLE_RATE, blocksize=FRAME_SAMPLES,
                                dtype="int16", channels=1, callback=callback, **kwargs):
-            leftover = b""
-            while True:
-                try:
-                    frame = self.audio_q.get(timeout=1.0)
-                except queue.Empty:
-                    continue
-                data = leftover + frame
-                usable = len(data) // (FRAME_SAMPLES * 2) * FRAME_SAMPLES * 2
-                leftover = data[usable:]
-                for i in range(0, usable, FRAME_SAMPLES * 2):
-                    chunk = data[i : i + FRAME_SAMPLES * 2]
-                    now = time.time()
-                    if now - self.last_hit <= COOLDOWN_SECONDS or _speaking.is_set():
-                        continue
-                    if self._feed_oww(chunk):
-                        self.last_hit = time.time()
-                        self.oww.reset()
-                        print("[ear] wake word detected", flush=True)
-                        _chime()
-                        _notify_server_wake()
-                        if self.vosk_model:
-                            command = self._record_command()
-                            if command:
-                                print(f"[ear] heard: {command}", flush=True)
-                                self._handle_exchange(command)
-                            else:
-                                _speak_reply("I did not catch that.")
-                        break
+            if self.phrase_mode:
+                self._phrase_loop()
+            else:
+                self._oww_loop(have_vosk)
 
 
 def run_once() -> None:
