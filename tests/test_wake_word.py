@@ -66,3 +66,52 @@ class TestDispatcherNoReplay:
         q = disp.subscribe()
         disp.publish({"type": "note", "text": "live"})
         assert len(q) == 1 and q[0]["type"] == "note"
+
+    def test_duplicate_announcements_suppressed(self, temp_db):
+        from core.scheduler import Dispatcher
+
+        disp = Dispatcher(poll_seconds=3600)
+        q = disp.subscribe()
+        for _ in range(3):
+            disp.publish({"type": "welcome", "kind": "welcome", "text": "Welcome back, sir."})
+        assert len(q) == 1  # identical proactive announcements deduped
+        disp.publish({"type": "welcome", "kind": "welcome", "text": "Welcome back, madam."})
+        assert len(q) == 2  # different text still passes
+
+    def test_chat_replies_never_deduped(self, temp_db):
+        from core.scheduler import Dispatcher
+
+        disp = Dispatcher(poll_seconds=3600)
+        q = disp.subscribe()
+        for _ in range(3):
+            disp.publish({"type": "voice_exchange", "text": "It is 10:00."})
+        assert len(q) == 3  # spoken replies to the user must always go through
+
+    def test_welcome_guard_survives_restart(self, temp_db):
+        """A server restart must not re-greet: the guard lives in the DB."""
+        from core.scheduler import Dispatcher
+
+        def cycle():
+            d = Dispatcher(poll_seconds=3600)  # fresh instance == restart
+            d._welcome_transition(2000)  # away
+            d._welcome_transition(30)  # back -> would greet
+            return d
+
+        first = cycle()
+        assert float(first._last_welcome) > 0  # greeted this time
+        second = cycle()
+        assert second._last_welcome == 0.0  # suppressed by persisted guard
+
+
+class TestWakePhrasesEndpoint:
+    def test_endpoint_lists_phrases(self, temp_db):
+        from fastapi.testclient import TestClient
+
+        from main import app
+
+        with TestClient(app) as client:
+            r = client.get("/api/wake-phrases")
+            assert r.status_code == 200
+            phrases = r.json()["phrases"]
+            assert isinstance(phrases, list) and phrases
+            assert any("evo" in p for p in phrases)

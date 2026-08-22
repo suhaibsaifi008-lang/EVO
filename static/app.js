@@ -542,8 +542,24 @@ function setupSpeech() {
       }
       const data = await res.json();
       $("sttPreview").textContent = "";
-      const text = (data.text || "").trim();
+      let text = (data.text || "").trim();
       if (!text) { toast("Didn't hear anything — try again."); return; }
+      if (wakeMode && !manualListen) {
+        const stripped = stripWakePhrase(text);
+        if (stripped === null) {
+          toast(`Ignored — say "${(wakePhrases[0] || "wake up evo")} ..." first.`);
+          $("sttPreview").textContent = "";
+          setTimeout(() => { if (wakeMode && !manualListen && offlineVoice) safeStart(); }, 500);
+          return;
+        }
+        text = stripped;
+        if (!text) {
+          // Woke with no command — listen for the command right away.
+          $("sttPreview").textContent = "Listening...";
+          setTimeout(() => { if (wakeMode && !manualListen && offlineVoice) safeStart(); }, 400);
+          return;
+        }
+      }
       send(text);
     } catch (err) {
       $("sttPreview").textContent = "";
@@ -566,6 +582,35 @@ function setupSpeech() {
 
   let manualListen = false;
 
+  /* ---- wake phrase gating (shared by cloud SR and offline capture) ---- */
+  let wakePhrases = ["wake up evo"];
+  try {
+    fetch("/api/wake-phrases").then((r) => r.json()).then((d) => {
+      if (Array.isArray(d.phrases) && d.phrases.length) wakePhrases = d.phrases;
+    }).catch(() => {});
+  } catch {}
+
+  const LEGACY_CALLSIGNS = ["jarvis", "hey jarvis", "evo", "evvo", "hey evo", "okay evo"];
+
+  function normalizeForWake(s) {
+    return String(s || "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+  }
+
+  function stripWakePhrase(text) {
+    // Returns the remainder after a wake phrase, "" if only the phrase was
+    // said, or null when no wake phrase is present.
+    const s = normalizeForWake(text);
+    if (!s) return null;
+    const candidates = wakePhrases.concat(LEGACY_CALLSIGNS)
+      .map((p) => normalizeForWake(p)).filter(Boolean);
+    for (const p of candidates) {
+      const idx = s.indexOf(p);
+      if (idx >= 0) return s.slice(idx + p.length).trim();
+    }
+    return null;
+  }
+  window._stripWakePhrase = stripWakePhrase;
+
   function safeStart() {
     if (offlineVoice) { if (wakeMode) startOfflineCapture(false); return; }
     try { recognition.start(); } catch {}
@@ -574,11 +619,9 @@ function setupSpeech() {
     $("sttPreview").textContent = "";
     if (!text) return;
     if (viaWake) {
-      const m = text.toLowerCase().replace(/[.,!?]/g, "")
-        .match(/^(?:jarvis|evo|evvo|hey evo|okay evo|wake ?up evo|wake up eva)[,\s]*(.*)$/);
-      if (!m) return;
-      text = m[1].trim();
-      if (!text) return;
+      const stripped = stripWakePhrase(text);
+      if (stripped === null || !stripped) return;
+      text = stripped;
     }
     send(text);
   }

@@ -343,6 +343,16 @@ def wake() -> dict:
     return {"ok": True}
 
 
+@app.get("/api/wake-phrases")
+def wake_phrases() -> dict:
+    try:
+        from core.listener import WAKE_PHRASES
+
+        return {"phrases": list(WAKE_PHRASES)}
+    except Exception:
+        return {"phrases": ["wake up evo"]}
+
+
 @app.post("/api/announce")
 def announce(event: dict) -> dict:
     text = str((event or {}).get("text", "")).strip()[:600]

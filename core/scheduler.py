@@ -1,3 +1,4 @@
+import hashlib
 import threading
 import time
 from collections import deque
@@ -5,6 +6,11 @@ from datetime import datetime
 from typing import Callable, Deque, Dict, List
 
 from . import db
+
+# Identical proactive announcements within this window are suppressed
+# (protects against restarts, duplicate servers and multi-window echo).
+DEDUPE_WINDOW = 600.0
+DEDUPE_TYPES = {"welcome", "reminder_due", "briefing", "watcher", "project_done", "project_log"}
 
 
 class Dispatcher(threading.Thread):
@@ -18,6 +24,7 @@ class Dispatcher(threading.Thread):
         self._stop = threading.Event()
         self.on_fire: List[Callable[[Dict], None]] = []
         self.backlog: Deque[Dict] = deque(maxlen=40)
+        self._recent: Dict[str, float] = {}
         self._last_idle = 0.0
         self._last_welcome = 0.0
 
@@ -37,6 +44,8 @@ class Dispatcher(threading.Thread):
 
     def publish(self, event: Dict) -> None:
         event.setdefault("ts", time.time())
+        if event.get("type") in DEDUPE_TYPES and self._is_duplicate(event):
+            return
         with self._lock:
             self.backlog.append(dict(event))
         for cb in list(self.on_fire):
@@ -52,6 +61,16 @@ class Dispatcher(threading.Thread):
                 q.append(event)
 
         _push()
+
+    def _is_duplicate(self, event: Dict) -> bool:
+        key = f"{event.get('type')}|{(event.get('text') or '')[:120]}"
+        h = hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
+        now = time.time()
+        with self._lock:
+            if now - self._recent.get(h, 0.0) < DEDUPE_WINDOW:
+                return True
+            self._recent[h] = now
+        return False
 
     def run(self) -> None:
         while not self._stop.is_set():
@@ -123,24 +142,32 @@ class Dispatcher(threading.Thread):
         now = time.time()
         was_away = self._last_idle > 1500
         is_back = idle < 120
-        if was_away and is_back and now - self._last_welcome > 4 * 3600:
-            self._last_welcome = now
-            message = "Welcome back, sir."
+        if was_away and is_back:
+            # Persisted guard: survives server restarts, so EVO greets at most
+            # once every 4 hours no matter how often it relaunches.
             try:
-                from .perception import active_window
-
-                message += f" I see {active_window()} on screen."
-            except Exception:
-                pass
-            summary = db.get_setting("last_screen_summary", "")
-            if summary and "|" in summary:
-                ts_raw, text = summary.split("|", 1)
+                last = float(db.get_setting("last_welcome_ts", "0") or 0)
+            except (TypeError, ValueError):
+                last = 0.0
+            if now - max(last, self._last_welcome) > 4 * 3600:
+                self._last_welcome = now
+                db.set_setting("last_welcome_ts", str(now))
+                message = "Welcome back, sir."
                 try:
-                    if time.time() - float(ts_raw) < 3600:
-                        message += f" Last I looked, your screen showed: {text.strip()}"
-                except ValueError:
+                    from .perception import active_window
+
+                    message += f" I see {active_window()} on screen."
+                except Exception:
                     pass
-            self.publish({"type": "welcome", "kind": "welcome", "text": message})
+                summary = db.get_setting("last_screen_summary", "")
+                if summary and "|" in summary:
+                    ts_raw, text = summary.split("|", 1)
+                    try:
+                        if time.time() - float(ts_raw) < 3600:
+                            message += f" Last I looked, your screen showed: {text.strip()}"
+                    except ValueError:
+                        pass
+                self.publish({"type": "welcome", "kind": "welcome", "text": message})
         self._last_idle = idle
 
     def stop(self) -> None:

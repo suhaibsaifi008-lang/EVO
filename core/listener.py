@@ -192,6 +192,7 @@ class Ear:
         self.oww = None
         self.vosk_model = None
         self.last_hit = 0.0
+        self.wake_count = 0
 
     def load(self) -> tuple[bool, bool]:
         have_vosk = False
@@ -207,12 +208,14 @@ class Ear:
         if WAKE_PHRASES:
             if have_vosk:
                 # Phrase mode uses Vosk transcripts; no openWakeWord needed.
+                _write_status("wake-phrase (vosk)", 0)
                 return False, True
             print("[ear] wake-phrase mode needs the local speech model - "
                   "falling back to openWakeWord.", flush=True)
         from openwakeword.model import Model
 
         self.oww = Model(wakeword_models=["hey_jarvis"], inference_framework="onnx")
+        _write_status("openwakeword (hey_jarvis)", 0)
         return True, have_vosk
 
     @property
@@ -280,6 +283,9 @@ class Ear:
     def _on_wake(self, command: str = "") -> None:
         """Common wake handling: chime, notify HUD, then run the command."""
         self.last_hit = time.time()
+        self.wake_count += 1
+        mode = "wake-phrase (vosk)" if self.phrase_mode else "openwakeword (hey_jarvis)"
+        _write_status(mode, self.wake_count)
         print("[ear] wake phrase detected", flush=True)
         _chime()
         _notify_server_wake()
@@ -423,6 +429,22 @@ def _pid_alive(pid: int) -> bool:
         return True
 
 
+def _write_status(mode: str, wakes: int) -> None:
+    """Heartbeat so diagnostics can prove which ear version is live."""
+    try:
+        (DATA_DIR / "ear_status.json").write_text(
+            json.dumps({
+                "ts": time.time(),
+                "mode": mode,
+                "wake_phrases": WAKE_PHRASES,
+                "wakes": wakes,
+            }),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
 def main() -> None:
     import os
 
@@ -435,9 +457,18 @@ def main() -> None:
 
             info = _json.loads(lock.read_text() or "{}")
             stale = time.time() - float(info.get("ts", 0)) >= 86400
-            if not stale and _pid_alive(int(info.get("pid", 0))):
-                print("[ear] another ear instance is already running - exiting.", flush=True)
-                return
+            pid = int(info.get("pid", 0))
+            if not stale and _pid_alive(pid) and pid != os.getpid():
+                # Take over: a running-but-outdated ear must never outvote the
+                # current code. Kill it and continue starting this one.
+                print(f"[ear] replacing existing ear instance (pid {pid})...", flush=True)
+                subprocess.run(
+                    ["taskkill", "/F", "/PID", str(pid)],
+                    capture_output=True,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    timeout=10,
+                )
+                time.sleep(0.6)
         except Exception:
             pass
     lock.write_text(json.dumps({"pid": os.getpid(), "ts": time.time()}))

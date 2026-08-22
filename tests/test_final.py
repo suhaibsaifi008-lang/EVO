@@ -298,6 +298,8 @@ class TestReports:
 
 class TestWelcomeBack:
     def test_transition_publishes_once(self, temp_db, monkeypatch):
+        import time as _time
+
         from core.scheduler import Dispatcher
 
         d = Dispatcher(poll_seconds=999)
@@ -308,7 +310,9 @@ class TestWelcomeBack:
         assert len(captured) == 1 and "Welcome back" in captured[0]["text"]
         d._welcome_transition(30)
         assert len(captured) == 1
+        # Simulate four hours passing: both the in-memory and persisted guards.
         d._last_welcome -= 5 * 3600
+        temp_db.set_setting("last_welcome_ts", str(_time.time() - 5 * 3600))
         d._last_idle = 3000
         d._welcome_transition(45)
         assert len(captured) == 2
