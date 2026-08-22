@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -135,6 +135,10 @@ class PinGate:
 
 if config.ACCESS_PIN:
     app.add_middleware(PinGate)
+
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+
+app.mount("/static", StaticFiles(directory=str(_static_dir())), name="static")
 
 
 class ChatIn(BaseModel):

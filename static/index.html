@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>E.V.O — Console</title>
-<link rel="stylesheet" href="/style.css" />
+<title>E.V.O â€” Console</title>
+<link rel="stylesheet" href="/static/style.css?v=8" />
 </head>
 <body>
 <div class="app">
@@ -18,16 +18,16 @@
       </div>
     </div>
 
-    <button id="newChatBtn" class="new-chat">＋ New conversation</button>
+    <button id="newChatBtn" class="new-chat">ï¼‹ New conversation</button>
 
     <nav class="nav">
-      <button class="nav-item active" data-view="console">◈ <span>Console</span></button>
-      <button class="nav-item" data-view="tasks">✓ <span>Tasks</span></button>
-      <button class="nav-item" data-view="projects">⬡ <span>Projects</span></button>
-      <button class="nav-item" data-view="knowledge">❖ <span>Knowledge</span></button>
-      <button class="nav-item" data-view="memory">✦ <span>Memory</span></button>
-      <button class="nav-item" data-view="system">▤ <span>System</span></button>
-      <button class="nav-item" data-view="setup">⚙ <span>Setup</span></button>
+      <button class="nav-item active" data-view="console">â—ˆ <span>Console</span></button>
+      <button class="nav-item" data-view="tasks">âœ“ <span>Tasks</span></button>
+      <button class="nav-item" data-view="projects">â¬¡ <span>Projects</span></button>
+      <button class="nav-item" data-view="knowledge">â– <span>Knowledge</span></button>
+      <button class="nav-item" data-view="memory">âœ¦ <span>Memory</span></button>
+      <button class="nav-item" data-view="system">â–¤ <span>System</span></button>
+      <button class="nav-item" data-view="setup">âš™ <span>Setup</span></button>
     </nav>
 
     <div class="side-foot">
@@ -39,10 +39,10 @@
 
   <main class="main">
     <header class="topbar">
-      <button id="menuBtn" class="icon-btn only-mobile" title="Menu">☰</button>
+      <button id="menuBtn" class="icon-btn only-mobile" title="Menu">â˜°</button>
       <h2 id="viewTitle">Console</h2>
       <div class="spacer"></div>
-      <button id="telemetryToggle" class="icon-btn" title="Telemetry rail">◫</button>
+      <button id="telemetryToggle" class="icon-btn" title="Telemetry rail">â—«</button>
     </header>
 
     <section class="stage">
@@ -57,7 +57,7 @@
                 <div class="core"><span>EVO</span></div>
               </div>
               <h2 id="heroGreeting">Systems online.</h2>
-              <p class="hero-sub">Ask anything — or use the mic. I can act, not just answer.</p>
+              <p class="hero-sub">Ask anything â€” or use the mic. I can act, not just answer.</p>
               <div class="chips">
                 <button class="chip" data-q="Plan my morning">Plan my morning</button>
                 <button class="chip" data-q="Run diagnostics">Run diagnostics</button>
@@ -72,7 +72,7 @@
         <!-- TASKS -->
         <div class="view panel-view" data-vname="tasks" id="view-tasks">
           <div class="panel-card wide">
-            <h3 class="section-title">Reminders · timers · alarms</h3>
+            <h3 class="section-title">Reminders Â· timers Â· alarms</h3>
             <ul id="reminderList" class="list"></ul>
             <form id="remForm">
               <input id="remText" placeholder="Remind me to..." required />
@@ -137,7 +137,7 @@
 
             <h3 class="section-title">Autonomy</h3>
             <label class="row"><input type="checkbox" id="autoApprove" /> Let EVO run its own code without asking</label>
-            <label class="row"><input type="checkbox" id="deepMode" checked /> Deep Mode — extra reasoning pass on complex answers</label>
+            <label class="row"><input type="checkbox" id="deepMode" checked /> Deep Mode â€” extra reasoning pass on complex answers</label>
             <label class="row"><input type="checkbox" id="guiAllowed" /> Let EVO move the mouse and type (GUI control)</label>
             <label class="row"><input type="checkbox" id="allowMailSend" /> Allow sending real emails (drafts always need approval)</label>
 
@@ -156,9 +156,9 @@
       <form id="chatForm" class="composer only-console">
         <div class="stt-preview" id="sttPreview"></div>
         <div class="composer-pill">
-          <textarea id="chatInput" rows="1" placeholder="Message EVO…   (Enter to send · Space to talk)"></textarea>
+          <textarea id="chatInput" rows="1" placeholder="Message EVOâ€¦   (Enter to send Â· Space to talk)"></textarea>
           <button type="button" id="micBtn" class="mic" title="Push to talk (Space)"><span></span>MIC</button>
-          <button type="submit" class="send" title="Send">➤</button>
+          <button type="submit" class="send" title="Send">âž¤</button>
         </div>
       </form>
     </section>
@@ -168,28 +168,28 @@
     <div class="tele-card">
       <h4>LIVE SYSTEM</h4>
       <div id="teleStatus" class="bars">
-        <div class="bar-row"><span>CPU</span><div class="bar"><i id="barCpu"></i></div><b id="valCpu">–</b></div>
-        <div class="bar-row"><span>RAM</span><div class="bar"><i id="barRam"></i></div><b id="valRam">–</b></div>
-        <div class="bar-row"><span>BAT</span><div class="bar"><i id="barBat"></i></div><b id="valBat">–</b></div>
+        <div class="bar-row"><span>CPU</span><div class="bar"><i id="barCpu"></i></div><b id="valCpu">â€“</b></div>
+        <div class="bar-row"><span>RAM</span><div class="bar"><i id="barRam"></i></div><b id="valRam">â€“</b></div>
+        <div class="bar-row"><span>BAT</span><div class="bar"><i id="barBat"></i></div><b id="valBat">â€“</b></div>
       </div>
       <small id="teleUptime" class="dim"></small>
     </div>
     <div class="tele-card">
       <h4>MISSIONS</h4>
-      <div id="teleProjects" class="mini-list">—</div>
+      <div id="teleProjects" class="mini-list">â€”</div>
     </div>
     <div class="tele-card">
       <h4>WATCHERS</h4>
-      <div id="teleWatchers" class="mini-list">—</div>
+      <div id="teleWatchers" class="mini-list">â€”</div>
     </div>
     <div class="tele-card">
       <h4>AUDIT FEED</h4>
-      <div id="teleAudit" class="mini-list dim">—</div>
+      <div id="teleAudit" class="mini-list dim">â€”</div>
     </div>
   </aside>
 </div>
 
 <div id="toasts"></div>
-<script src="/app.js"></script>
+<script src="/static/app.js?v=8"></script>
 </body>
 </html>

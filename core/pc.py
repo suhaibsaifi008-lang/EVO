@@ -1,4 +1,4 @@
-﻿import ctypes
+import ctypes
 import os
 import re
 import shutil

@@ -1,4 +1,4 @@
-﻿import ctypes
+import ctypes
 import json
 import os
 import queue
