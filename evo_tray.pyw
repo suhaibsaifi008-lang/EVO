@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 from core.config import ASSISTANT_NAME, HOST, PORT  # noqa: E402
+from core.singleinstance import hold_single_instance  # noqa: E402
 
 SERVER_PORT = PORT
 
@@ -46,6 +47,9 @@ def make_icon_image():
 
 
 def main() -> None:
+    if not hold_single_instance("tray.lock", "EVO_TRAY_MUTEX"):
+        print("[tray] could not acquire single-instance slot - exiting.", flush=True)
+        return
     threading.Thread(target=serve, daemon=True).start()
 
     try:

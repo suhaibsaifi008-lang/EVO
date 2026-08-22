@@ -105,10 +105,12 @@ async function send(text) {
 }
 
 function toast(text) {
+  const box = $("toasts");
   const t = document.createElement("div");
   t.className = "toast";
   t.textContent = text;
-  $("toasts").appendChild(t);
+  box.appendChild(t);
+  while (box.children.length > 4) box.firstElementChild.remove();
   setTimeout(() => t.remove(), 9000);
 }
 

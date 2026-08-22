@@ -22,7 +22,12 @@ SAMPLE_RATE = 16000
 
 MODELS_DIR = DATA_DIR / "models"
 VOSK_DIR = MODELS_DIR / "vosk"
-VOSK_ZIP_URL = "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.22.zip"
+# Primary + fallbacks. alphacephei removed small-en-us-0.22 (404), so the
+# current small model is 0.15; bigger lgraph model as last resort.
+VOSK_ZIP_URLS = [
+    "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
+    "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22-lgraph.zip",
+]
 
 # Wake phrases: comma-separated. Matched offline against live Vosk transcripts,
 # so ANY phrase works (default: "wake up evo"). Set JARVIS_WAKE_PHRASES= (empty)
@@ -116,29 +121,37 @@ def _ensure_vosk() -> Path | None:
             pass
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     zipped = MODELS_DIR / "vosk.zip"
-    print("[ear] downloading local speech model (~40MB, one time)...", flush=True)
-    try:
-        urllib.request.urlretrieve(VOSK_ZIP_URL, zipped)
-        with zipfile.ZipFile(zipped) as zf:
-            inner = zf.namelist()[0].split("/")[0]
-            zf.extractall(MODELS_DIR)
-        extracted = MODELS_DIR / inner
-        if extracted.exists():
-            if VOSK_DIR.exists():
-                for child in extracted.iterdir():
-                    child.replace(VOSK_DIR / child.name)
-                extracted.rmdir()
-            else:
-                extracted.rename(VOSK_DIR)
-        zipped.unlink()
-        return VOSK_DIR if VOSK_DIR.exists() and any(VOSK_DIR.iterdir()) else None
-    except Exception as exc:
-        print(f"[ear] vosk model download failed: {exc}", flush=True)
+    last_exc = ""
+    for url in VOSK_ZIP_URLS:
+        print(f"[ear] downloading local speech model ({url.rsplit('/', 1)[-1]})...", flush=True)
         try:
-            zipped.unlink(missing_ok=True)
-        except Exception:
-            pass
-        return None
+            urllib.request.urlretrieve(url, zipped)
+            with zipfile.ZipFile(zipped) as zf:
+                inner = zf.namelist()[0].split("/")[0]
+                zf.extractall(MODELS_DIR)
+            extracted = MODELS_DIR / inner
+            if extracted.exists():
+                if VOSK_DIR.exists():
+                    for child in extracted.iterdir():
+                        child.replace(VOSK_DIR / child.name)
+                    extracted.rmdir()
+                else:
+                    extracted.rename(VOSK_DIR)
+            try:
+                zipped.unlink()
+            except OSError:
+                pass
+            if VOSK_DIR.exists() and any(VOSK_DIR.iterdir()):
+                return VOSK_DIR
+        except Exception as exc:
+            last_exc = str(exc)
+            print(f"[ear] model download failed: {exc}", flush=True)
+            try:
+                zipped.unlink(missing_ok=True)
+            except Exception:
+                pass
+    _write_status("ERROR: speech model unavailable - " + last_exc, 0)
+    return None
 
 
 def _rms(frame: bytes) -> float:
@@ -212,9 +225,20 @@ class Ear:
                 return False, True
             print("[ear] wake-phrase mode needs the local speech model - "
                   "falling back to openWakeWord.", flush=True)
-        from openwakeword.model import Model
+        try:
+            from openwakeword.model import Model
 
-        self.oww = Model(wakeword_models=["hey_jarvis"], inference_framework="onnx")
+            try:
+                self.oww = Model(wakeword_models=["hey_jarvis"], inference_framework="onnx")
+            except Exception as exc:
+                # Package model files can be missing on fresh installs.
+                from openwakeword.utils import download_models
+
+                download_models(["hey_jarvis"])
+                self.oww = Model(wakeword_models=["hey_jarvis"], inference_framework="onnx")
+        except Exception as exc:
+            _write_status(f"ERROR: wake engine unavailable - {exc}", 0)
+            raise
         _write_status("openwakeword (hey_jarvis)", 0)
         return True, have_vosk
 
@@ -450,42 +474,27 @@ def main() -> None:
 
     if os.environ.get("JARVIS_EAR_DISABLE") == "1":
         return
-    lock = DATA_DIR / "ear.lock"
-    if lock.exists():
-        try:
-            import json as _json
+    from .singleinstance import hold_single_instance
 
-            info = _json.loads(lock.read_text() or "{}")
-            stale = time.time() - float(info.get("ts", 0)) >= 86400
-            pid = int(info.get("pid", 0))
-            if not stale and _pid_alive(pid) and pid != os.getpid():
-                # Take over: a running-but-outdated ear must never outvote the
-                # current code. Kill it and continue starting this one.
-                print(f"[ear] replacing existing ear instance (pid {pid})...", flush=True)
-                subprocess.run(
-                    ["taskkill", "/F", "/PID", str(pid)],
-                    capture_output=True,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                    timeout=10,
-                )
-                time.sleep(0.6)
-        except Exception:
-            pass
-    lock.write_text(json.dumps({"pid": os.getpid(), "ts": time.time()}))
+    if not hold_single_instance("ear.lock", "EVO_EAR_MUTEX"):
+        print("[ear] could not acquire single-instance slot - exiting.", flush=True)
+        return
     backoff = 3
     try:
         while True:
             try:
                 run_once()
+                backoff = 3
             except KeyboardInterrupt:
                 return
             except Exception as exc:
+                _write_status(f"ERROR: {exc}", 0)
                 print(f"[ear] {exc} — retrying in {backoff}s", flush=True)
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 60)
     finally:
         try:
-            lock.unlink()
+            (DATA_DIR / "ear.lock").unlink()
         except Exception:
             pass
 
