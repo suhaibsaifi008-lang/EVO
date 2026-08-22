@@ -40,7 +40,7 @@ def _kill(pid: int) -> None:
         pass
 
 
-def hold_single_instance(lock_name: str, mutex_name: str, max_rounds: int = 6) -> bool:
+def hold_single_instance(lock_name: str, mutex_name: str, max_rounds: int = 10) -> bool:
     """Become THE instance. Returns False only if taking over keeps failing."""
     import ctypes
 
@@ -55,7 +55,7 @@ def hold_single_instance(lock_name: str, mutex_name: str, max_rounds: int = 6) -
             except Exception:
                 pass
             return True
-        # A live instance holds the mutex. Replace it.
+        # A live instance holds the mutex. Replace it and wait for it to die.
         pid = 0
         try:
             raw = (DATA_DIR / lock_name)
@@ -65,11 +65,11 @@ def hold_single_instance(lock_name: str, mutex_name: str, max_rounds: int = 6) -
             pid = 0
         if pid and pid != os.getpid():
             _kill(pid)
-            deadline = time.time() + 5
+            deadline = time.time() + 12
             while time.time() < deadline and _pid_alive(pid):
                 time.sleep(0.3)
         else:
             # Lock file lost/stale but mutex still held by an orphaned handle;
             # brief grace then retry - the holder usually exits on its own.
-            time.sleep(1.0)
+            time.sleep(1.5)
     return False

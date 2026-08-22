@@ -7,7 +7,7 @@ from typing import Deque
 import sys
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi import HTTPException
 from pydantic import BaseModel
 

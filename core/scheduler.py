@@ -28,6 +28,15 @@ class Dispatcher(threading.Thread):
         self._last_idle = 0.0
         self._last_welcome = 0.0
 
+    def start(self) -> None:
+        """Idempotent: repeat lifespans (uvicorn reload, tests) must not crash."""
+        if self.is_alive():
+            return
+        try:
+            super().start()
+        except RuntimeError:
+            pass
+
     def subscribe(self) -> Deque[Dict]:
         """Register a live subscriber. Old backlog events are deliberately NOT
         replayed: the console re-subscribes on every poll, so seeding queues

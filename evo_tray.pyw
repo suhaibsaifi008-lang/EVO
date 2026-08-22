@@ -16,9 +16,21 @@ SERVER_PORT = PORT
 def serve() -> None:
     import uvicorn
 
+    from core.config import HOST
     from main import app
 
-    uvicorn.run(app, host="127.0.0.1", port=SERVER_PORT, log_level="warning", log_config=None)
+    host = "0.0.0.0" if os.environ.get("JARVIS_LAN") == "1" else HOST
+    backoff = 2.0
+    while True:
+        try:
+            uvicorn.run(app, host=host, port=SERVER_PORT, log_level="warning", log_config=None)
+            return
+        except SystemExit:
+            raise
+        except Exception as exc:
+            print(f"[tray] server error ({exc}) - restarting in {backoff:.0f}s", flush=True)
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 30)
 
 
 def wait_port(timeout: float = 20.0) -> bool:

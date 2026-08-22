@@ -115,3 +115,17 @@ class TestWakePhrasesEndpoint:
             phrases = r.json()["phrases"]
             assert isinstance(phrases, list) and phrases
             assert any("evo" in p for p in phrases)
+
+
+class TestRootPage:
+    def test_console_page_serves(self, temp_db):
+        """Regression: index() once raised NameError -> full-page 500."""
+        from fastapi.testclient import TestClient
+
+        from main import app
+
+        with TestClient(app) as client:
+            r = client.get("/")
+            assert r.status_code == 200
+            assert "EVO" in r.text
+            assert "app.js" in r.text
