@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>E.V.O — Console</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar" id="sidebar">
+    <div class="brand-row">
+      <div class="brand-orb"><span></span></div>
+      <div class="brand-text">
+        <h1 id="brandName">E.V.O</h1>
+        <small>personal intelligence</small>
+      </div>
+    </div>
+
+    <button id="newChatBtn" class="new-chat">＋ New conversation</button>
+
+    <nav class="nav">
+      <button class="nav-item active" data-view="console">◈ <span>Console</span></button>
+      <button class="nav-item" data-view="tasks">✓ <span>Tasks</span></button>
+      <button class="nav-item" data-view="projects">⬡ <span>Projects</span></button>
+      <button class="nav-item" data-view="knowledge">❖ <span>Knowledge</span></button>
+      <button class="nav-item" data-view="memory">✦ <span>Memory</span></button>
+      <button class="nav-item" data-view="system">▤ <span>System</span></button>
+      <button class="nav-item" data-view="setup">⚙ <span>Setup</span></button>
+    </nav>
+
+    <div class="side-foot">
+      <label class="chip-toggle" title="Spoken replies"><input type="checkbox" id="voiceOut" checked /><span>Voice</span></label>
+      <label class="chip-toggle" title='Always-on "Hey Jarvis"'><input type="checkbox" id="wakeMode" /><span>Wake</span></label>
+      <span id="connState" class="state-dot offline" title="server"></span>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <button id="menuBtn" class="icon-btn only-mobile" title="Menu">☰</button>
+      <h2 id="viewTitle">Console</h2>
+      <div class="spacer"></div>
+      <button id="telemetryToggle" class="icon-btn" title="Telemetry rail">◫</button>
+    </header>
+
+    <section class="stage">
+      <div class="center">
+
+        <!-- CONSOLE -->
+        <div class="view active" data-vname="console" id="view-console">
+          <div class="stream-wrap">
+            <div class="hero" id="hero">
+              <div class="orb-wrap small">
+                <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div>
+                <div class="core"><span>EVO</span></div>
+              </div>
+              <h2 id="heroGreeting">Systems online.</h2>
+              <p class="hero-sub">Ask anything — or use the mic. I can act, not just answer.</p>
+              <div class="chips">
+                <button class="chip" data-q="Plan my morning">Plan my morning</button>
+                <button class="chip" data-q="Run diagnostics">Run diagnostics</button>
+                <button class="chip" data-q="Research the best budget mechanical keyboards">Research something</button>
+                <button class="chip" data-q="Build me a website for my bakery">Build me a website</button>
+              </div>
+            </div>
+            <div id="log" class="log"></div>
+          </div>
+        </div>
+
+        <!-- TASKS -->
+        <div class="view panel-view" data-vname="tasks" id="view-tasks">
+          <div class="panel-card wide">
+            <h3 class="section-title">Reminders · timers · alarms</h3>
+            <ul id="reminderList" class="list"></ul>
+            <form id="remForm">
+              <input id="remText" placeholder="Remind me to..." required />
+              <input id="remWhen" type="datetime-local" required />
+              <button type="submit">Add</button>
+            </form>
+          </div>
+        </div>
+
+        <!-- PROJECTS -->
+        <div class="view panel-view" data-vname="projects" id="view-projects">
+          <div class="panel-card wide">
+            <h3 class="section-title">Background missions</h3>
+            <ul id="projectList" class="list"></ul>
+            <form id="projForm">
+              <input id="projGoal" placeholder="Project goal e.g. research EV batteries and write a report" required />
+              <button type="submit">Launch mission</button>
+            </form>
+          </div>
+        </div>
+
+        <!-- KNOWLEDGE -->
+        <div class="view panel-view" data-vname="knowledge" id="view-knowledge">
+          <div class="panel-card wide">
+            <h3 class="section-title">Studied knowledge</h3>
+            <ul id="knowledgeList" class="list"></ul>
+          </div>
+        </div>
+
+        <!-- MEMORY -->
+        <div class="view panel-view" data-vname="memory" id="view-memory">
+          <div class="panel-card wide">
+            <h3 class="section-title">What EVO remembers about you</h3>
+            <ul id="memoryList" class="list"></ul>
+            <form id="memForm">
+              <input id="memKey" placeholder="key e.g. favourite colour" required />
+              <input id="memValue" placeholder="value e.g. blue" required />
+              <button type="submit">Remember</button>
+            </form>
+          </div>
+        </div>
+
+        <!-- SYSTEM -->
+        <div class="view panel-view" data-vname="system" id="view-system">
+          <div class="panel-card wide">
+            <h3 class="section-title">Live system status</h3>
+            <ul id="statusList" class="list plain"></ul>
+            <button id="refreshStatus">Refresh</button>
+            <div id="auditBox"></div>
+          </div>
+        </div>
+
+        <!-- SETUP -->
+        <div class="view panel-view" data-vname="setup" id="view-setup">
+          <div class="panel-card wide">
+            <h3 class="section-title">Daily briefing & context</h3>
+            <label class="row"><input type="checkbox" id="briefingEnabled" /> Enable daily briefing</label>
+            <label class="row">Time <input type="time" id="briefingTime" value="08:00" /></label>
+            <label class="row">City (weather) <input type="text" id="cityInput" placeholder="auto-detect" /></label>
+            <label class="row">Calendar iCal URL <input type="text" id="calUrl" placeholder="secret .ics link" /></label>
+            <label class="row">Ambient vision (min, 0=off) <input type="number" id="ambientVision" min="0" max="120" value="0" /></label>
+
+            <h3 class="section-title">Autonomy</h3>
+            <label class="row"><input type="checkbox" id="autoApprove" /> Let EVO run its own code without asking</label>
+            <label class="row"><input type="checkbox" id="deepMode" checked /> Deep Mode — extra reasoning pass on complex answers</label>
+            <label class="row"><input type="checkbox" id="guiAllowed" /> Let EVO move the mouse and type (GUI control)</label>
+            <label class="row"><input type="checkbox" id="allowMailSend" /> Allow sending real emails (drafts always need approval)</label>
+
+            <button id="saveSettings">Save settings</button>
+            <p id="llmState" class="hint"></p>
+
+            <h3 class="section-title">Voice</h3>
+            <label class="row"><input type="checkbox" id="neuralVoice" checked /> Cinematic neural voice (Edge-TTS)</label>
+            <select id="neuralVoiceSelect" class="full"></select>
+            <select id="voiceSelect" class="full" title="Browser fallback voice"></select>
+          </div>
+        </div>
+
+      </div>
+
+      <form id="chatForm" class="composer only-console">
+        <div class="stt-preview" id="sttPreview"></div>
+        <div class="composer-pill">
+          <textarea id="chatInput" rows="1" placeholder="Message EVO…   (Enter to send · Space to talk)"></textarea>
+          <button type="button" id="micBtn" class="mic" title="Push to talk (Space)"><span></span>MIC</button>
+          <button type="submit" class="send" title="Send">➤</button>
+        </div>
+      </form>
+    </section>
+  </main>
+
+  <aside class="telemetry" id="telemetryRail">
+    <div class="tele-card">
+      <h4>LIVE SYSTEM</h4>
+      <div id="teleStatus" class="bars">
+        <div class="bar-row"><span>CPU</span><div class="bar"><i id="barCpu"></i></div><b id="valCpu">–</b></div>
+        <div class="bar-row"><span>RAM</span><div class="bar"><i id="barRam"></i></div><b id="valRam">–</b></div>
+        <div class="bar-row"><span>BAT</span><div class="bar"><i id="barBat"></i></div><b id="valBat">–</b></div>
+      </div>
+      <small id="teleUptime" class="dim"></small>
+    </div>
+    <div class="tele-card">
+      <h4>MISSIONS</h4>
+      <div id="teleProjects" class="mini-list">—</div>
+    </div>
+    <div class="tele-card">
+      <h4>WATCHERS</h4>
+      <div id="teleWatchers" class="mini-list">—</div>
+    </div>
+    <div class="tele-card">
+      <h4>AUDIT FEED</h4>
+      <div id="teleAudit" class="mini-list dim">—</div>
+    </div>
+  </aside>
+</div>
+
+<div id="toasts"></div>
+<script src="/app.js"></script>
+</body>
+</html>
