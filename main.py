@@ -318,6 +318,14 @@ def status() -> dict:
 def health() -> dict:
     from core import config
 
+    def _gemini_ready() -> bool:
+        try:
+            from core import gemini_live
+
+            return gemini_live.live_enabled()
+        except Exception:
+            return False
+
     out = {
         "llm_configured": config.llm_enabled(),
         "llm_online": False,
@@ -326,6 +334,7 @@ def health() -> dict:
         "watchers_active": 0,
         "missions_running": 0,
         "telegram": bool(__import__("core.telegram_link", fromlist=["x"]).telegram_ready()),
+        "voice_engine": "gemini-live" if _gemini_ready() else "vosk-local",
         "version": "3.1",
     }
     try:

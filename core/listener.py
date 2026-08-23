@@ -341,6 +341,7 @@ class Ear:
         self.wake_count = 0
         self._gen = 0                      # exchange generation (barge-in cancel)
         self.stop_tts = threading.Event()  # set to silence playback instantly
+        self.live_voice = False            # set in load(): Gemini Live available?
 
     def say(self, text: str, blocking: bool = False) -> None:
         """Speak text. Non-blocking by default; always interruptible.
@@ -419,6 +420,12 @@ class Ear:
                 have_vosk = True
         except Exception as exc:
             print(f"[ear] local transcription unavailable: {exc}", flush=True)
+        try:
+            from . import gemini_live
+
+            self.live_voice = gemini_live.live_enabled()
+        except Exception:
+            self.live_voice = False
         if WAKE_PHRASES:
             if have_vosk:
                 # Phrase mode uses Vosk transcripts; no openWakeWord needed.
@@ -556,6 +563,90 @@ class Ear:
             else:
                 self.say("I did not catch that.")
 
+    def _run_live_session(self) -> None:
+        """Duplex Gemini Live conversation. Blocks until the session ends
+        (exit phrase, idle timeout, or error) then returns to Vosk watching."""
+        from . import gemini_live as gl
+
+        sess = gl.LiveVoiceSession(self.audio_q)
+        speaker = gl.Speaker()
+        sess.on_play = speaker.play
+        sess.on_interrupt = speaker.interrupt
+        ended = threading.Event()
+
+        def handle_turn(user: str, reply: str) -> None:
+            if user or reply:
+                _announce({"type": "voice_exchange", "kind": "voice", "spoken": True,
+                           "user_text": user[:400], "text": (reply or "")[:900]})
+                print(f"[ear] live turn: {user[:60]!r} -> {len(reply)} chars", flush=True)
+
+        sess.on_turn = handle_turn
+        sess.on_exit = ended.set
+        if not sess.start():
+            _write_status(f"ERROR: {sess.last_error}", self.wake_count)
+            print(f"[ear] {sess.last_error} - falling back to local voice", flush=True)
+            self.say("I could not reach Gemini, so I am staying offline.")
+            return
+
+        from .grammar import grammar_json
+
+        grec = None
+        try:
+            from vosk import KaldiRecognizer
+
+            grec = KaldiRecognizer(self.vosk_model, SAMPLE_RATE, grammar_json())
+            grec.SetWords(False)
+        except Exception:
+            pass
+
+        speaker.start()
+        _write_status("conversation active (Gemini Live)", self.wake_count)
+        print("[ear] Gemini Live session open", flush=True)
+        self._drain_audio()
+        last_voice = time.time()
+        recent_commands: dict[str, float] = {}
+        try:
+            while not ended.is_set() and not sess.stopped:
+                try:
+                    frame = self.audio_q.get(timeout=1.0)
+                except queue.Empty:
+                    if time.time() - last_voice > SESSION_IDLE_EXIT:
+                        print("[ear] live session idle - closing", flush=True)
+                        break
+                    continue
+                sess.feed(frame)
+                if _rms(frame) > 500:
+                    last_voice = time.time()
+                # Offline command sniffer stays armed during live talk.
+                if grec is not None:
+                    try:
+                        if grec.AcceptWaveform(frame):
+                            cand = json.loads(grec.FinalResult()).get("text", "").strip()
+                        else:
+                            cand = ""
+                        if cand and not is_exit_phrase(cand):
+                            now = time.time()
+                            if now - recent_commands.get(cand, 0) > 5.0:
+                                recent_commands[cand] = now
+                                print(f"[ear] live command: {cand}", flush=True)
+                                speaker.interrupt()
+                                self.barge_in()
+                                self._start_exchange(cand)
+                        elif cand and is_exit_phrase(cand):
+                            sess.stop()
+                            break
+                    except Exception:
+                        pass
+        finally:
+            sess.stop()
+            ended.wait(timeout=8)
+            speaker.interrupt()
+            speaker.stop()
+            self.barge_in()
+            self._drain_audio()
+        _write_status("wake-phrase (vosk)", self.wake_count)
+        print("[ear] back to wake listening", flush=True)
+
     def _voice_session_loop(self) -> None:
         """ChatGPT-style full-duplex voice.
 
@@ -672,6 +763,18 @@ class Ear:
                     _notify_server_wake()
                     rec.Reset()
                     self._drain_audio()
+
+                    # Gemini Live takes conversation; Vosk stays the wake word
+                    # and offline fallback.
+                    if self.live_voice:
+                        if rest.strip() and not is_exit_phrase(rest):
+                            print(f"[ear] heard: {rest}", flush=True)
+                            self._start_exchange(rest)
+                        try:
+                            self._run_live_session()
+                        except Exception as exc:
+                            print(f"[ear] live session failed: {exc}", flush=True)
+                        break
                     if rest.strip():
                         if is_exit_phrase(rest):
                             sleep_mode()
@@ -762,7 +865,9 @@ class Ear:
         import sounddevice as sd
 
         oww_ok, have_vosk = self.load()
-        if self.phrase_mode:
+        if self.live_voice:
+            mode = f"wake phrase '{WAKE_PHRASES[0]}' + Gemini Live"
+        elif self.phrase_mode:
             mode = f"wake phrase '{WAKE_PHRASES[0]}'"
         else:
             mode = ("full-duplex voice" if have_vosk else "wake-only (no local STT)")

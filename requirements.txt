@@ -11,3 +11,4 @@ pypdf>=4.0
 pywebview>=5.0
 vosk>=0.3.45
 playwright>=1.40
+google-genai>=1.0
