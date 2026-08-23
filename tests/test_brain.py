@@ -147,7 +147,9 @@ class TestConversationMemory:
 
 class TestControl:
     def test_open_unknown_app(self, brain):
-        assert "could not find" in brain.respond("open zzzznotrealapp")["reply"].lower()
+        # Unknown apps now fall back to the web automatically (bias to action).
+        reply = brain.respond("open zzzznotrealapp")["reply"].lower()
+        assert "isn't an installed app" in reply or "opened it on the web" in reply
 
     def test_shutdown_requires_confirm(self, brain, monkeypatch):
         fired = []

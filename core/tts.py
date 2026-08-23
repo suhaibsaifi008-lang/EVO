@@ -41,6 +41,28 @@ def list_voices() -> dict:
     return dict(CURATED_VOICES)
 
 
+def engine_for(text: str) -> str:
+    """auto: instant local SAPI for short confirmations, neural Edge-TTS for
+    anything substantive. Override with JARVIS_TTS_ENGINE=edge|sapi."""
+    import os
+
+    mode = os.environ.get("JARVIS_TTS_ENGINE", "auto").strip().lower()
+    if mode in ("edge", "sapi"):
+        return mode
+    return "sapi" if len(text) <= 90 else "edge"
+
+
+def synthesize_best(text: str, tone: str = "") -> Path:
+    """Pick the right engine for the text length. Never raises silently-slow."""
+    text_clean = " ".join((text or "").split())
+    if engine_for(text_clean) == "sapi":
+        try:
+            return synthesize_offline(text_clean, tone=tone)
+        except Exception:
+            pass
+    return synthesize(text_clean, tone=tone)
+
+
 def synthesize(text: str, voice: str = "", tone: str = "") -> Path:
     import edge_tts
 

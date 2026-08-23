@@ -79,6 +79,11 @@ SITES = {
     "flipkart": "https://www.flipkart.com",
     "linkedin": "https://www.linkedin.com",
     "scholarships": "https://scholarships.gov.in",
+    "wikipedia": "https://en.wikipedia.org",
+    "stack overflow": "https://stackoverflow.com",
+    "spotify web": "https://open.spotify.com",
+    "twitch": "https://www.twitch.tv",
+    "telegram web": "https://web.telegram.org",
 }
 
 BROWSER_ALIASES = {
@@ -272,7 +277,9 @@ def open_in_browser(target: str, browser: str = "") -> str:
         arg = target  # non-URL text: Chromium/Firefox search with their own engine
     exe = _resolve_browser(browser) if browser else default_browser_exe()
     if exe:
-        subprocess.Popen([exe, "--new-window", arg], creationflags=CREATE_NO_WINDOW)
+        # No --new-window: reuses the running browser window and opens a TAB,
+        # exactly like typing in the address bar ourselves.
+        subprocess.Popen([exe, arg], creationflags=CREATE_NO_WINDOW)
         return f"{arg} in {_browser_label(exe)}"
     if arg != target:
         # A concrete URL/site: open via OS default browser association.

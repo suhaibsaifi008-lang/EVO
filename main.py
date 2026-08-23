@@ -105,6 +105,26 @@ async def lifespan(app: FastAPI):
             pass
 
     _threading.Thread(target=_prewarm_stt, daemon=True, name="evo-stt-prewarm").start()
+
+    def _warm_tts_cache() -> None:
+        """Pre-synthesize stock phrases so first playback is instant."""
+        import time as _time
+
+        _time.sleep(6)
+        try:
+            from core.tts import synthesize
+
+            for phrase in ("I'm listening.", "Going back to standby.",
+                           "Very good. Say wake up evo when you need me.",
+                           "I did not catch that.", "Done."):
+                try:
+                    synthesize(phrase)
+                except Exception:
+                    break
+        except Exception:
+            pass
+
+    _threading.Thread(target=_warm_tts_cache, daemon=True, name="evo-tts-warm").start()
     yield
     try:
         from core import watchers

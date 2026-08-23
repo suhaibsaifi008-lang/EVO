@@ -15,7 +15,7 @@ from .config import DATA_DIR, HOST, PORT
 SERVER_URL = os.environ.get("JARVIS_SERVER_URL", f"http://{HOST}:{PORT}").rstrip("/")
 MIC_DEVICE = os.environ.get("JARVIS_MIC_INDEX", "")
 WAKE_THRESHOLD = float(os.environ.get("JARVIS_WAKE_THRESHOLD", "0.5"))
-COOLDOWN_SECONDS = 3.5
+COOLDOWN_SECONDS = 2.0
 MAX_COMMAND_SECONDS = 9
 SILENCE_FRAMES_TO_END = 14
 FRAME_SAMPLES = 1280
@@ -23,11 +23,12 @@ SAMPLE_RATE = 16000
 
 MODELS_DIR = DATA_DIR / "models"
 VOSK_DIR = MODELS_DIR / "vosk"
-# Primary + fallbacks. alphacephei removed small-en-us-0.22 (404), so the
-# current small model is 0.15; bigger lgraph model as last resort.
+# Primary = full 0.22 model with lookahead graph (124MB, streaming-capable,
+# FAR more accurate than the 40MB small model). Small model as fallback.
 VOSK_ZIP_URLS = [
-    "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
     "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22-lgraph.zip",
+    "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
+    "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip",
 ]
 
 # Wake phrases: comma-separated. Matched offline against live Vosk transcripts,
@@ -44,6 +45,8 @@ WAKE_FUZZY_THRESHOLD = 0.8
 # dialogue; every sentence is answered without repeating the wake word.
 SESSION_IDLE_EXIT = 45.0  # seconds of silence before the session closes
 BARGE_IN_RMS = 1100       # sustained mic level during playback that cuts EVO off
+QUIET_RMS = 320           # below this, the mic is considered silent
+EARLY_COMMIT_S = 0.7      # stable partial + quiet mic => send immediately
 EXIT_PHRASES = (
     "stop listening", "go to sleep", "go away", "that will be all",
     "that'll be all", "goodbye", "good bye", "thank you goodbye",
@@ -163,9 +166,9 @@ def _speak_reply(text: str, stop_event: "threading.Event | None" = None,
         path = None
         try:
             sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-            from core.tts import synthesize
+            from core.tts import synthesize_best
 
-            path = synthesize(text[:800])
+            path = synthesize_best(text[:800])
         except Exception:
             path = None
         if path is not None:
@@ -390,9 +393,9 @@ class Ear:
     def _synth_safe(text: str):
         try:
             sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-            from core.tts import synthesize
+            from core.tts import synthesize_best
 
-            return synthesize(text[:400])
+            return synthesize_best(text[:400])
         except Exception:
             return None
 
@@ -568,6 +571,8 @@ class Ear:
         active = False
         last_activity = time.time()
         barge_hits = 0
+        last_partial_key = ""
+        last_partial_change = 0.0
 
         def sleep_mode() -> None:
             nonlocal active
@@ -625,6 +630,8 @@ class Ear:
                         heard = json.loads(rec.PartialResult()).get("partial", "")
                     except Exception:
                         heard = ""
+                if heard:
+                    heard = _correct(heard)
 
                 # ---- SLEEPING: watch for the wake phrase (partials OK) ----
                 if not active:
@@ -652,8 +659,25 @@ class Ear:
                     break
 
                 # ---- ACTIVE: answer every finished sentence ----
+                # Early commit: act on a stable partial after a beat of quiet
+                # mic instead of waiting for Vosk's full finalization - this
+                # is what makes replies feel instant.
+                now_level = _rms(chunk)
+                if not is_final and heard.strip():
+                    partial_key = normalize_text(heard)[:80]
+                    if partial_key == last_partial_key:
+                        if (
+                            now_level < QUIET_RMS
+                            and time.time() - last_partial_change >= EARLY_COMMIT_S
+                            and time.time() - last_activity > 0.8
+                        ):
+                            is_final = True  # commit this partial as final
+                    else:
+                        last_partial_key = partial_key
+                        last_partial_change = time.time()
                 if not is_final or not heard.strip():
                     continue
+                last_partial_key = ""
                 last_activity = time.time()
                 if is_exit_phrase(heard):
                     self.barge_in()
@@ -747,6 +771,16 @@ def _pid_alive(pid: int) -> bool:
         return True
     except Exception:
         return True
+
+
+def _correct(text: str) -> str:
+    """Vocabulary-aware fixup of raw ASR text (apps/sites/command words)."""
+    try:
+        from .vocab import correct_terms
+
+        return correct_terms(text)
+    except Exception:
+        return text
 
 
 def _write_status(mode: str, wakes: int) -> None:

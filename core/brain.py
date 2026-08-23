@@ -395,7 +395,7 @@ class Brain:
     # ---------- PC control ----------
 
     def _open(self, text, lowered):
-        m = re.match(r"^(?:please\s+)?open\s+(.+)$", lowered)
+        m = re.match(r"^(?:please\s+)?(?:can you\s+)?open\s+(.+)$", lowered)
         if not m:
             return None
         target = m.group(1).strip()
@@ -403,7 +403,8 @@ class Brain:
 
         browser = ""
         br_m = re.search(
-            r"\s+(?:in|on|with|using)\s+(brave(?:\s+browser)?|chrome|google\s+chrome|edge|microsoft\s+edge|firefox)"
+            r"\s+(?:in|on|with|using)\s+(?:the\s+|my\s+|a\s+)?"
+            r"(brave(?:\s+browser)?|chrome|google\s+chrome|edge|microsoft\s+edge|firefox)"
             r"(?:\s+browser)?\s*$", target)
         if br_m:
             browser = re.sub(r"\s+", " ", br_m.group(1))
@@ -456,10 +457,13 @@ class Brain:
             opened = pc.open_target(target)
             return (f"Opening {opened}.", None)
         except FileNotFoundError:
-            if target in pc.SITES or pc._is_web_address(target):
+            # Not an app: fall back to the web automatically, like a real
+            # assistant would - no interrogating the user.
+            try:
                 opened = pc.open_in_browser(target)
-                return (f"No app named '{target}', so I opened it on the web: {opened}.", None)
-            return (f"I could not find an app called '{target}'. Try opening its website instead?", None)
+                return (f"'{target}' isn't an installed app, so I opened it on the web.", None)
+            except Exception as exc:
+                return (f"I couldn't find '{target}' as an app or site: {exc}", None)
         except Exception as exc:
             return (f"Opening {target} failed: {exc}", None)
 
@@ -579,6 +583,12 @@ class Brain:
     # ---------- daily briefing settings ----------
 
     def _settings(self, text, lowered):
+        if re.search(r"(enable|turn on|allow|activate).*(mouse|gui|control the (pc|computer))", lowered) and "off" not in lowered:
+            db.set_setting("gui_allowed", "1")
+            return ("Mouse and keyboard control enabled. I can now interact with apps on screen.", {"refresh": ["settings"]})
+        if re.search(r"(disable|stop|turn off).*(mouse|gui)", lowered):
+            db.set_setting("gui_allowed", "0")
+            return ("Mouse and keyboard control disabled.", {"refresh": ["settings"]})
         if re.search(r"(disable|stop|cancel|turn off).*(briefing|daily)", lowered):
             db.set_setting("briefing_enabled", "0")
             return ("Daily briefings are off.", {"refresh": ["settings"]})

@@ -97,7 +97,64 @@ class TestOpenTarget:
         result = pc.open_in_browser("youtube", "brave")
         assert "Brave" in result
         assert launched and launched[0][0] == "C:/Apps/brave.exe"
-        assert "youtube.com" in launched[0][2]
+        assert "youtube.com" in launched[0][1]
+
+    def test_browser_reuses_window_no_new_window_flag(self, monkeypatch):
+        launched = []
+        monkeypatch.setattr(
+            pc, "_resolve_browser", lambda name: "C:/Apps/brave.exe"
+        )
+        monkeypatch.setattr(pc.subprocess, "Popen", lambda cmd, **k: launched.append(cmd) or object())
+        pc.open_in_browser("youtube", "brave")
+        assert "--new-window" not in launched[0]  # tabs reuse the running window
+        assert "youtube.com" in launched[0][1]
+
+
+class TestOpenIntentParsing:
+    def test_open_youtube_in_the_brave_browser(self, brain, temp_db, monkeypatch):
+        """'in THE brave browser' - articles must not break browser extraction."""
+        calls = []
+        monkeypatch.setattr(pc, "open_in_browser", lambda q, b="": calls.append((q, b)) or q)
+        brain.respond("open youtube in the brave browser")
+        assert calls and calls[0][0] == "youtube" and calls[0][1].startswith("brave")
+
+    def test_unknown_target_opens_web_without_asking(self, brain, temp_db, monkeypatch):
+        opened = []
+        monkeypatch.setattr(pc, "_lnk_index", lambda: {})
+        monkeypatch.setattr(pc, "_uwp_index", lambda: {})
+        monkeypatch.setattr(pc, "default_browser_exe", lambda: None)
+        monkeypatch.setattr("webbrowser.open", lambda u: opened.append(u))
+        reply = brain.respond("open zzznotrealapp")["reply"].lower()
+        assert opened, "should fall back to a web search automatically"
+        assert "isn't an installed app" in reply or "opened it on the web" in reply
+
+    def test_gui_toggle_by_voice(self, brain, temp_db):
+        from core import db as d
+
+        d.set_setting("gui_allowed", "0")
+        r1 = brain.respond("enable mouse control")["reply"].lower()
+        assert d.get_setting("gui_allowed") == "1"
+        assert "enabled" in r1
+        brain.respond("turn off mouse control")
+        assert d.get_setting("gui_allowed") == "0"
+
+
+class TestVocabCorrection:
+    def test_brand_names_fixed(self):
+        from core.vocab import correct_terms
+
+        assert "youtube" in correct_terms("open utube").lower()
+        assert "calculator" in correct_terms("open calculation").lower()
+
+    def test_clean_text_untouched(self):
+        from core.vocab import correct_terms
+
+        assert correct_terms("what is the time") == "what is the time"
+
+    def test_wikipedia_is_a_known_site_now(self):
+        import core.pc as pc
+
+        assert "wikipedia" in pc.SITES
 
     def test_search_phrase_passed_raw_to_browser_engine(self, monkeypatch):
         launched = []
@@ -107,8 +164,8 @@ class TestOpenTarget:
         monkeypatch.setattr(pc.subprocess, "Popen", lambda cmd, **k: launched.append(cmd) or object())
         pc.open_in_browser("best budget mechanical keyboards", "brave")
         # Plain text goes to the browser untouched -> its OWN default search engine.
-        assert launched[0][2] == "best budget mechanical keyboards"
-        assert "bing.com" not in launched[0][2]
+        assert launched[0][1] == "best budget mechanical keyboards"
+        assert "bing.com" not in launched[0][1]
 
 
 class TestOpenIntents:

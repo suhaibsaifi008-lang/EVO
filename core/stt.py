@@ -106,4 +106,11 @@ def transcribe_wav(data: bytes) -> str:
         piece = pcm[i : i + frame_bytes]
         if piece:
             rec.AcceptWaveform(piece)
-    return json.loads(rec.FinalResult()).get("text", "").strip()
+    text = json.loads(rec.FinalResult()).get("text", "").strip()
+    try:
+        from .vocab import correct_terms
+
+        text = correct_terms(text)
+    except Exception:
+        pass
+    return text
