@@ -67,6 +67,30 @@ class TestExitPhrases:
         assert not is_exit_phrase("what's the weather")
 
 
+class TestGrammarRescue:
+    def test_phrase_list_is_clean(self):
+        from core.grammar import grammar_phrases
+
+        phrases = grammar_phrases()
+        assert any(p == "open youtube" for p in phrases), "youtube must be in grammar"
+        assert not any("{x}" in p or "{t}" in p for p in phrases), "no raw templates may leak"
+        assert len(phrases) > 100
+
+    def test_trust_guard(self):
+        from core.grammar import trust_grammar
+
+        assert trust_grammar("open youtube", "open u tube") is True
+        assert trust_grammar("wikipedia", "wake up ever") is False  # wake audio, not a command
+        long_chat = "what do you think about the political situation in the country right now"
+        assert trust_grammar("open wikipedia", long_chat) is False
+
+    def test_looks_like_command(self):
+        from core.grammar import looks_like_command
+
+        assert looks_like_command("open calculator")
+        assert not looks_like_command("tell me a story about dragons")
+
+
 class TestAgentPromptActsInsteadOfLecturing:
     def test_prompt_forbids_reciting_tools(self):
         lowered = SYSTEM_TEMPLATE.lower()

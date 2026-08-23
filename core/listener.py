@@ -23,12 +23,13 @@ SAMPLE_RATE = 16000
 
 MODELS_DIR = DATA_DIR / "models"
 VOSK_DIR = MODELS_DIR / "vosk"
-# Primary = full 0.22 model with lookahead graph (124MB, streaming-capable,
-# FAR more accurate than the 40MB small model). Small model as fallback.
+# SPEED RULE, learned the hard way: the 124MB lgraph model transcribes ~10x
+# slower than realtime on typical CPUs, so the ear ends up listening to the
+# past. The small model is realtime and accurate ENOUGH once boosted by the
+# grammar rescuer + vocab corrector. Opt into lgraph with JARVIS_VOSK_MODEL=big.
 VOSK_ZIP_URLS = [
-    "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22-lgraph.zip",
     "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
-    "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip",
+    "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22-lgraph.zip",
 ]
 
 # Wake phrases: comma-separated. Matched offline against live Vosk transcripts,
@@ -409,8 +410,9 @@ class Ear:
     def load(self) -> tuple[bool, bool]:
         have_vosk = False
         try:
-            import vosk  # noqa: F401
+            import vosk
 
+            vosk.SetLogLevel(-1)
             model_dir = _ensure_vosk()
             if model_dir:
                 self.vosk_model = vosk.Model(str(model_dir))
@@ -565,14 +567,24 @@ class Ear:
         """
         from vosk import KaldiRecognizer
 
+        from .grammar import grammar_json, trust_grammar
+
         rec = KaldiRecognizer(self.vosk_model, SAMPLE_RATE)
         rec.SetWords(False)
+        try:
+            # Strict command rescuer: only outputs known phrases, so any hit
+            # is trustworthy even when the general model garbles brand names.
+            grec = KaldiRecognizer(self.vosk_model, SAMPLE_RATE, grammar_json())
+            grec.SetWords(False)
+        except Exception:
+            grec = None
         leftover = b""
         active = False
         last_activity = time.time()
         barge_hits = 0
         last_partial_key = ""
         last_partial_change = 0.0
+        noise_floor = QUIET_RMS * 0.5
 
         def sleep_mode() -> None:
             nonlocal active
@@ -633,6 +645,18 @@ class Ear:
                 if heard:
                     heard = _correct(heard)
 
+                # Grammar rescuer runs in parallel while ACTIVE.
+                grammar_text = ""
+                if active and grec is not None:
+                    try:
+                        g_final = grec.AcceptWaveform(chunk)
+                        if g_final:
+                            grammar_text = json.loads(grec.FinalResult()).get("text", "")
+                        if not grammar_text:
+                            grammar_text = json.loads(grec.PartialResult()).get("partial", "")
+                    except Exception:
+                        pass
+
                 # ---- SLEEPING: watch for the wake phrase (partials OK) ----
                 if not active:
                     rest = match_wake_phrase(heard)
@@ -663,11 +687,13 @@ class Ear:
                 # mic instead of waiting for Vosk's full finalization - this
                 # is what makes replies feel instant.
                 now_level = _rms(chunk)
+                noise_floor = 0.9 * noise_floor + 0.1 * now_level
+                quiet = now_level < max(QUIET_RMS, noise_floor * 2.2)
                 if not is_final and heard.strip():
                     partial_key = normalize_text(heard)[:80]
                     if partial_key == last_partial_key:
                         if (
-                            now_level < QUIET_RMS
+                            quiet
                             and time.time() - last_partial_change >= EARLY_COMMIT_S
                             and time.time() - last_activity > 0.8
                         ):
@@ -679,17 +705,29 @@ class Ear:
                     continue
                 last_partial_key = ""
                 last_activity = time.time()
-                if is_exit_phrase(heard):
+
+                # Grammar rescuer has the final word on commands - but only
+                # when the utterance is command-shaped; freeform conversation
+                # must never be forced through a strict phrase list.
+                if grammar_text and trust_grammar(grammar_text, heard):
+                    command_text = grammar_text
+                else:
+                    command_text = heard.strip()
+                if is_exit_phrase(command_text) or is_exit_phrase(heard):
                     self.barge_in()
                     rec.Reset()
+                    if grec is not None:
+                        grec.Reset()
                     self._drain_audio()
                     sleep_mode()
                     self.say("Very good. Say wake up evo when you need me.")
                     break
                 rec.Reset()
+                if grec is not None:
+                    grec.Reset()
                 self._drain_audio()
-                print(f"[ear] heard: {heard}", flush=True)
-                self._start_exchange(heard.strip())
+                print(f"[ear] heard: {command_text}", flush=True)
+                self._start_exchange(command_text)
                 break
 
     def _oww_loop(self, have_vosk: bool) -> None:

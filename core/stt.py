@@ -88,7 +88,13 @@ def _pcm_from_wav(data: bytes) -> tuple[int, int, bytes]:
 
 
 def transcribe_wav(data: bytes) -> str:
-    """Transcribe 16-bit PCM WAV bytes to text, fully offline."""
+    """Transcribe 16-bit PCM WAV bytes to text, fully offline.
+
+    A strict grammar recognizer (built from the user's apps/sites/commands)
+    runs first - it can only output known phrases, so a hit is trustworthy
+    and fixes the brand names the open model mangles. Free speech falls
+    through to the general model + vocabulary corrector.
+    """
     model = _get_model()
     from vosk import KaldiRecognizer
 
@@ -99,14 +105,24 @@ def transcribe_wav(data: bytes) -> str:
             samples[i] for i in range(0, len(samples), channels)
         ))
         pcm = mono.tobytes()
-    rec = KaldiRecognizer(model, rate)
-    rec.SetWords(False)
     frame_bytes = rate * 2 // 10  # 100 ms of mono 16-bit audio
-    for i in range(0, len(pcm), frame_bytes):
-        piece = pcm[i : i + frame_bytes]
-        if piece:
-            rec.AcceptWaveform(piece)
-    text = json.loads(rec.FinalResult()).get("text", "").strip()
+    frames = [pcm[i : i + frame_bytes] for i in range(0, len(pcm), frame_bytes)]
+
+    def run_rec(rec) -> str:
+        for piece in frames:
+            if piece:
+                rec.AcceptWaveform(piece)
+        return json.loads(rec.FinalResult()).get("text", "").strip()
+
+    try:
+        from .grammar import grammar_json
+
+        g_text = run_rec(KaldiRecognizer(model, rate, grammar_json()))
+        if g_text:
+            return g_text
+    except Exception:
+        pass
+    text = run_rec(KaldiRecognizer(model, rate))
     try:
         from .vocab import correct_terms
 
