@@ -314,6 +314,29 @@ def status() -> dict:
         return {"error": str(exc)}
 
 
+_llm_probe = {"ts": 0.0, "ok": False}
+
+
+def _llm_online_cached() -> bool:
+    """Fast, cached reachability check - health must never hang on a
+    slow provider (probe timeout 6s, cached for 60s)."""
+    import time
+
+    if time.time() - _llm_probe["ts"] < 60:
+        return bool(_llm_probe["ok"])
+    ok = False
+    try:
+        from core import llm
+
+        llm.chat([{"role": "user", "content": "Reply with the single word: online"}],
+                 temperature=0, timeout=6)
+        ok = True
+    except Exception:
+        ok = False
+    _llm_probe.update(ts=time.time(), ok=ok)
+    return ok
+
+
 @app.get("/api/health")
 def health() -> dict:
     from core import config
@@ -328,7 +351,7 @@ def health() -> dict:
 
     out = {
         "llm_configured": config.llm_enabled(),
-        "llm_online": False,
+        "llm_online": _llm_online_cached(),
         "ollama_ready": config.ollama_ready(),
         "db": "ok",
         "watchers_active": 0,
@@ -349,14 +372,6 @@ def health() -> dict:
         out["missions_running"] = len([p for p in db.list_projects() if p["status"] == "running"])
     except Exception:
         pass
-    if config.llm_enabled():
-        try:
-            from core import llm
-
-            llm.chat([{"role": "user", "content": "Reply with the single word: online"}], temperature=0)
-            out["llm_online"] = True
-        except Exception:
-            pass
     return out
 
 

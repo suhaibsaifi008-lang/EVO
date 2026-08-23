@@ -15,7 +15,13 @@ import time
 
 from . import config
 
-DEFAULT_MODEL = "gemini-2.0-flash-live-001"
+DEFAULT_MODELS = [
+    # Tried in order; first that connects wins. Names verified against the
+    # live API catalogue (older 2.0-flash-live models are retired).
+    "gemini-2.5-flash-native-audio-latest",
+    "gemini-3.1-flash-live-preview",
+    "gemini-2.0-flash-live-001",
+]
 INPUT_RATE = 16000   # pcm16 mono we send
 OUTPUT_RATE = 24000  # pcm16 mono gemini returns
 
@@ -46,10 +52,11 @@ def live_enabled() -> bool:
     return bool(gemini_key())
 
 
-def _model() -> str:
+def _model_candidates() -> list:
     import os
 
-    return os.environ.get("JARVIS_GEMINI_MODEL", "").strip() or DEFAULT_MODEL
+    override = os.environ.get("JARVIS_GEMINI_MODEL", "").strip()
+    return [override] if override else list(DEFAULT_MODELS)
 
 
 def is_exit_text(text: str) -> bool:
@@ -132,58 +139,81 @@ class LiveVoiceSession:
             input_audio_transcription=types.AudioTranscription(),
             output_audio_transcription=types.AudioTranscription(),
         )
-        async with client.aio.live.connect(model=_model(), config=cfg) as session:
-            input_buf = b""
-            out_text = ""
-            in_text = ""
-            last_feed = time.time()
-
-            async def sender() -> None:
-                nonlocal input_buf, last_feed
-                while True:
-                    try:
-                        chunk = await asyncio.to_thread(self._audio_in.get, True, 0.25)
-                    except Exception:
-                        chunk = None
-                    if chunk is not None:
-                        input_buf += chunk
-                        last_feed = time.time()
-                    if len(input_buf) >= INPUT_RATE * 2 * 0.06 or (
-                        input_buf and time.time() - last_feed > 0.15
-                    ):
-                        payload, input_buf = input_buf[: INPUT_RATE * 2 * 2], input_buf[INPUT_RATE * 2 * 2:]
-                        await session.send(
-                            input=types.Blob(data=payload, mime_type=f"audio/pcm;rate={INPUT_RATE}")
-                        )
-                    else:
-                        await asyncio.sleep(0.02)
-
-            sender_task = asyncio.create_task(sender())
+        session = None
+        last_err = ""
+        for model in _model_candidates():
             try:
-                async for msg in session.receive():
-                    if self._stop.is_set():
+                cm = client.aio.live.connect(model=model, config=cfg)
+                session = await cm.__aenter__()
+                break
+            except Exception as exc:
+                last_err = f"{model}: {exc}"
+                session = None
+        if session is None:
+            raise RuntimeError(f"no live model reachable - {last_err}")
+        try:
+            async with session:
+                await self._pump(session)
+        except AttributeError:
+            # some SDK versions manage the context differently
+            await self._pump(session)
+
+    async def _pump(self, session) -> None:
+        from google.genai import types
+
+        input_buf = b""
+        out_text = ""
+        in_text = ""
+        last_feed = time.time()
+
+        async def sender() -> None:
+            nonlocal input_buf, last_feed
+            while True:
+                try:
+                    chunk = await asyncio.to_thread(self._audio_in.get, True, 0.25)
+                except Exception:
+                    chunk = None
+                if chunk is not None:
+                    input_buf += chunk
+                    last_feed = time.time()
+                if len(input_buf) >= INPUT_RATE * 2 * 0.06 or (
+                    input_buf and time.time() - last_feed > 0.15
+                ):
+                    payload, input_buf = input_buf[: INPUT_RATE * 2 * 2], input_buf[INPUT_RATE * 2 * 2:]
+                    blob = types.Blob(data=payload, mime_type=f"audio/pcm;rate={INPUT_RATE}")
+                    try:
+                        await session.send_realtime_input(audio=blob)
+                    except AttributeError:
+                        await session.send(input=blob)
+                else:
+                    await asyncio.sleep(0.02)
+
+        sender_task = asyncio.create_task(sender())
+        try:
+            async for msg in session.receive():
+                if self._stop.is_set():
+                    break
+                sc = getattr(msg, "server_content", None)
+                if sc is not None and getattr(sc, "interrupted", False):
+                    self.on_interrupt()
+                data = getattr(msg, "data", None)
+                if data:
+                    self.on_play(data)
+                it = getattr(sc, "input_transcription", None) if sc else None
+                if it is not None and getattr(it, "text", ""):
+                    in_text += it.text
+                    if is_exit_text(in_text):
                         break
-                    sc = getattr(msg, "server_content", None)
-                    if sc is not None and getattr(sc, "interrupted", False):
-                        self.on_interrupt()
-                    data = getattr(msg, "data", None)
-                    if data:
-                        self.on_play(data)
-                    it = getattr(sc, "input_transcription", None) if sc else None
-                    if it is not None and getattr(it, "text", ""):
-                        in_text += it.text
-                        if is_exit_text(in_text):
-                            break
-                    ot = getattr(sc, "output_transcription", None) if sc else None
-                    if ot is not None and getattr(ot, "text", ""):
-                        out_text += ot.text
-                    tc = getattr(sc, "turn_complete", False) if sc else False
-                    if tc:
-                        if out_text.strip() or in_text.strip():
-                            self.on_turn(in_text.strip(), out_text.strip())
-                        in_text, out_text = "", ""
-            finally:
-                sender_task.cancel()
+                ot = getattr(sc, "output_transcription", None) if sc else None
+                if ot is not None and getattr(ot, "text", ""):
+                    out_text += ot.text
+                tc = getattr(sc, "turn_complete", False) if sc else False
+                if tc:
+                    if out_text.strip() or in_text.strip():
+                        self.on_turn(in_text.strip(), out_text.strip())
+                    in_text, out_text = "", ""
+        finally:
+            sender_task.cancel()
 
     def _run_loop(self) -> None:
         self._audio_in: "queue.Queue[bytes]" = queue.Queue(maxsize=200)
